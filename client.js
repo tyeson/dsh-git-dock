@@ -673,6 +673,8 @@ window.__ModuleLoader__.load({
 
     /** Open the floating merge picker under the review tab's Merge button. */
     function openMergePicker(sessionId, element, repoInfo) {
+      // The two floating panels are mutually exclusive.
+      closePanel(false)
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setMergeState({
@@ -838,6 +840,8 @@ window.__ModuleLoader__.load({
 
     /** Open the panel anchored at the chip element. */
     function openPanel(sessionId, element) {
+      // The two floating panels are mutually exclusive.
+      closeMergePicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       lastChipElement = element
@@ -1726,6 +1730,11 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         ensureStyle()
       }, [])
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        // A repository change (e.g. a branch switch elsewhere) invalidates the picker.
+        return onRepoChanged(() => closeMergePicker())
+      }, [snapshot.open])
       React.useEffect(() => {
         if (snapshot.open !== true) return undefined
         const onPointerDown = (event) => {
