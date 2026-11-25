@@ -1116,8 +1116,11 @@ window.__ModuleLoader__.load({
 
     function ensureStyle() {
       if (typeof document === 'undefined') return
-      if (document.getElementById(STYLE_ID) !== null) return
-      const style = document.createElement('style')
+      // Client-plugin HMR can replace the module while the previous <style> tag
+      // stays in the page. Always rewrite its content so CSS changes land even
+      // without a full page reload.
+      const existing = document.getElementById(STYLE_ID)
+      const style = existing !== null ? existing : document.createElement('style')
       style.id = STYLE_ID
       style.textContent = [
         '.dgd-chip{appearance:none;display:inline-flex;align-items:center;gap:4px;max-width:320px;padding:1px 8px;border:0;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));cursor:pointer;transition:background .12s ease,color .12s ease}',
@@ -1252,7 +1255,7 @@ window.__ModuleLoader__.load({
         '.gct-merge{padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:6px}',
         '.gct-merge-list{max-height:240px;overflow:auto;display:flex;flex-direction:column}',
       ].join('\n')
-      document.head.appendChild(style)
+      if (existing === null) document.head.appendChild(style)
     }
 
     // ── Icons ─────────────────────────────────────────────────────────────
