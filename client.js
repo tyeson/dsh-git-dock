@@ -225,6 +225,7 @@ window.__ModuleLoader__.load({
         'tab.fileCount': '{n} 个文件',
         'tab.branch': '当前分支',
         'tab.branchHint': '切换分支',
+        'tab.baseHint': '选择对比基线',
       },
       en: {
         'chip.loading': 'Reading branch…',
@@ -420,6 +421,7 @@ window.__ModuleLoader__.load({
         'tab.fileCount': '{n} files',
         'tab.branch': 'Branch',
         'tab.branchHint': 'Switch branch',
+        'tab.baseHint': 'Choose the comparison base',
       },
     }
 
@@ -673,8 +675,9 @@ window.__ModuleLoader__.load({
 
     /** Open the floating merge picker under the review tab's Merge button. */
     function openMergePicker(sessionId, element, repoInfo) {
-      // The two floating panels are mutually exclusive.
+      // The floating panels are mutually exclusive.
       closePanel(false)
+      closeBasePicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setMergeState({
@@ -838,10 +841,116 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ── Base picker store (comparison baseline dropdown) ─────────────────────
+
+    let basePicker = {
+      open: false,
+      anchor: null,
+      sessionId: null,
+      candidates: null,
+      status: 'idle',
+      error: null,
+      current: null,
+      onSelect: null,
+    }
+
+    const basePickerListeners = new Set()
+    let baseToken = 0
+
+    function getBaseState() {
+      return basePicker
+    }
+
+    function subscribeBase(listener) {
+      basePickerListeners.add(listener)
+      return () => basePickerListeners.delete(listener)
+    }
+
+    function setBaseState(patch) {
+      basePicker = Object.assign({}, basePicker, patch)
+      for (const listener of basePickerListeners) {
+        try {
+          listener()
+        } catch {
+          // A broken subscriber must not break the others.
+        }
+      }
+    }
+
+    function useBaseStore() {
+      if (typeof React.useSyncExternalStore === 'function') {
+        return React.useSyncExternalStore(subscribeBase, getBaseState)
+      }
+      const [, force] = React.useState(0)
+      React.useEffect(() => subscribeBase(() => force((value) => value + 1)), [])
+      return basePicker
+    }
+
+    /** Open the comparison-base dropdown under its toolbar button. */
+    function openBasePicker(sessionId, element, names, current, onSelect) {
+      closeMergePicker()
+      closePanel(false)
+      const rect = element.getBoundingClientRect()
+      const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
+      setBaseState({
+        open: true,
+        anchor: {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          placement: rect.top > viewportHeight * 0.5 ? 'above' : 'below',
+        },
+        sessionId,
+        candidates: names.map((name) => ({ name })),
+        status: 'loading',
+        error: null,
+        current,
+        onSelect,
+      })
+      void loadBaseCandidates(sessionId, names)
+    }
+
+    function closeBasePicker() {
+      baseToken += 1
+      setBaseState({ open: false, anchor: null, candidates: null, status: 'idle', error: null, onSelect: null })
+    }
+
+    async function loadBaseCandidates(sessionId, names) {
+      const token = ++baseToken
+      try {
+        const value = await callApi('branches', { sessionId })
+        if (token !== baseToken) return
+        const index = new Map()
+        for (const branch of [...(value.local ?? []), ...(value.remote ?? [])]) index.set(branch.name, branch)
+        setBaseState({
+          candidates: names.map((name) => {
+            const meta = index.get(name)
+            return meta === undefined
+              ? { name }
+              : { name, sha: meta.sha, committedAt: meta.committedAt, author: meta.author }
+          }),
+          status: 'ready',
+          error: null,
+        })
+      } catch (thrown) {
+        if (token !== baseToken) return
+        setBaseState({ status: 'error', error: { code: thrown.code, message: thrown.message } })
+      }
+    }
+
+    /** Choose one comparison baseline: hand it to the tab, then close. */
+    function chooseBase(name) {
+      const select = basePicker.onSelect
+      closeBasePicker()
+      if (typeof select === 'function') select(name)
+    }
+
     /** Open the panel anchored at the chip element. */
     function openPanel(sessionId, element) {
-      // The two floating panels are mutually exclusive.
+      // The floating panels are mutually exclusive.
       closeMergePicker()
+      closeBasePicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       lastChipElement = element
@@ -1075,6 +1184,12 @@ window.__ModuleLoader__.load({
         '.gdt-seg-btn{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;padding:2px 8px;border-radius:calc(var(--dsw-radius-sm,6px) - 2px);cursor:pointer;white-space:nowrap}',
         '.gdt-seg-btn[data-active="true"]{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}',
         '.gdt-seg-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+        '.gdt-tabs{display:inline-flex;align-items:flex-end;gap:2px;border-bottom:1px solid var(--dsw-alias-border-l1);align-self:stretch}',
+        '.gdt-tab{appearance:none;background:transparent;border:0;border-bottom:2px solid transparent;padding:4px 10px 3px;margin-bottom:-1px;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}',
+        '.gdt-tab:hover{color:var(--dsw-alias-label-primary)}',
+        '.gdt-tab[data-active="true"]{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-brand-primary);font-weight:600}',
+        '.gdt-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+        '.gdt-caret{font-size:10px;opacity:.7;margin-left:2px}',
         '.gdt-summary{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}',
         '.gdt-spacer{flex:1}',
         '.gdt-btn{appearance:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}',
@@ -1869,6 +1984,104 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dgd-body' }, snapshot.target === null ? listBody : confirmBody))
     }
 
+    // ── Comparison-base picker overlay ─────────────────────────────────────
+
+    function BasePicker() {
+      useLang()
+      const snapshot = useBaseStore()
+      const panelRef = React.useRef(null)
+      React.useEffect(() => {
+        ensureStyle()
+      }, [])
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        // A repository change makes the candidate list stale.
+        return onRepoChanged(() => closeBasePicker())
+      }, [snapshot.open])
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        const onPointerDown = (event) => {
+          const node = panelRef.current
+          if (node !== null && node.contains(event.target)) return
+          const target = event.target
+          if (target !== null && typeof target.closest === 'function'
+            && (target.closest(`[${CHIP_ATTR}]`) !== null
+              || target.closest('[data-dsh-git-dock-merge]') !== null
+              || target.closest('[data-dsh-git-dock-base]') !== null)) return
+          closeBasePicker()
+        }
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return
+          event.stopPropagation()
+          closeBasePicker()
+        }
+        const onResize = () => closeBasePicker()
+        document.addEventListener('mousedown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        window.addEventListener('resize', onResize)
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+          window.removeEventListener('resize', onResize)
+        }
+      }, [snapshot.open])
+
+      if (snapshot.open !== true || snapshot.anchor === null) return null
+      const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth
+      const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
+      const width = Math.max(260, Math.min(360, viewportWidth - 16))
+      const left = Math.max(8, Math.min(snapshot.anchor.left, viewportWidth - width - 8))
+      const below = snapshot.anchor.placement === 'below'
+      const panelTop = Math.max(8, snapshot.anchor.bottom + 8)
+      const bottom = Math.max(8, viewportHeight - snapshot.anchor.top + 8)
+      const maxHeight = below
+        ? Math.min(440, Math.max(200, viewportHeight - snapshot.anchor.bottom - 24))
+        : Math.min(440, Math.max(200, snapshot.anchor.top - 24))
+
+      const body = snapshot.status === 'loading'
+        ? h('div', { className: 'dgd-empty' }, t('panel.loading'))
+        : snapshot.status === 'error'
+          ? h('div', { className: 'dgd-empty' }, errorText(snapshot.error))
+          : (snapshot.candidates === null || snapshot.candidates.length === 0)
+            ? h('div', { className: 'dgd-empty' }, t('panel.empty'))
+            : snapshot.candidates.map((candidate) => h('div', {
+              key: candidate.name,
+              className: 'dgd-row',
+              'data-current': candidate.name === snapshot.current ? 'true' : 'false',
+              role: 'button',
+              tabIndex: 0,
+              title: candidate.name,
+              onClick: () => chooseBase(candidate.name),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  chooseBase(candidate.name)
+                }
+              },
+            },
+            h('span', { className: 'dgd-row-icon' }, candidate.name === snapshot.current ? h(CheckIcon, null) : h(BranchIcon, { size: 12 })),
+            h('span', { className: 'dgd-row-main' },
+              h('span', { className: 'dgd-row-name' }, candidate.name),
+              h('span', { className: 'dgd-row-sub' }, [candidate.author, candidate.sha, timeAgo(candidate.committedAt)].filter((value) => value !== undefined && value !== '').join(' · '))),
+            candidate.name === snapshot.current ? h('span', { className: 'dgd-row-trail' }, '✓') : null))
+
+      return h('div', {
+        ref: panelRef,
+        className: 'dgd-panel',
+        style: below
+          ? { left: `${left}px`, top: `${panelTop}px`, width: `${width}px`, maxHeight: `${maxHeight}px` }
+          : { left: `${left}px`, bottom: `${bottom}px`, width: `${width}px`, maxHeight: `${maxHeight}px` },
+        role: 'dialog',
+        'aria-label': t('tab.base'),
+      },
+      h('div', { className: 'dgd-head' },
+        h('span', { className: 'dgd-head-icon' }, h(BranchIcon, { size: 15 })),
+        h('div', { className: 'dgd-head-text' },
+          h('span', { className: 'dgd-head-title' }, t('tab.base')),
+          h('span', { className: 'dgd-head-sub' }, t('tab.baseHint')))),
+      h('div', { className: 'dgd-body' }, body))
+    }
+
     // ── Changes tab (sidebar.right.pane.tab) ──────────────────────────────
 
     /** Open this plugin's review tab in the session's right sidebar. */
@@ -2351,10 +2564,10 @@ window.__ModuleLoader__.load({
       h('span', { className: 'gdt-branch-name' }, branchLabel),
       aheadBehind === '' ? null : h('span', { className: 'gdt-summary' }, aheadBehind))
 
-      const scopeButtons = h('div', { className: 'gdt-seg' },
+      const scopeButtons = h('div', { className: 'gdt-tabs' },
         h('button', {
           type: 'button',
-          className: 'gdt-seg-btn',
+          className: 'gdt-tab',
           'data-active': scope === 'worktree' ? 'true' : 'false',
           onClick: () => {
             setScope('worktree')
@@ -2364,7 +2577,7 @@ window.__ModuleLoader__.load({
         }, t('tab.scope.worktree')),
         h('button', {
           type: 'button',
-          className: 'gdt-seg-btn',
+          className: 'gdt-tab',
           'data-active': scope === 'branch' ? 'true' : 'false',
           onClick: () => {
             setScope('branch')
@@ -2372,23 +2585,29 @@ window.__ModuleLoader__.load({
           },
         }, t('tab.scope.branch')))
 
-      const baseSelect = scope === 'branch' && data !== null && data.baseCandidates.length > 0
-        ? h('select', {
-          className: 'gdt-select',
-          value: baseValue,
-          'aria-label': t('tab.base'),
-          title: t('tab.base'),
-          onChange: (event) => {
-            setBaseSel(event.target.value)
-            setSelected(null)
+      const baseButton = scope === 'branch' && data !== null && data.baseCandidates.length > 0
+        ? h('button', {
+          type: 'button',
+          className: 'gdt-btn gdt-branch-btn',
+          'data-dsh-git-dock-base': '1',
+          title: t('tab.baseHint'),
+          'aria-label': `${t('tab.base')}: ${baseValue}`,
+          onClick: (event) => {
+            openBasePicker(sessionId, event.currentTarget, data.baseCandidates, baseValue, (name) => {
+              setBaseSel(name)
+              setSelected(null)
+            })
           },
-        }, data.baseCandidates.map((name) => h('option', { key: name, value: name }, name)))
+        },
+        h(BranchIcon, { size: 12 }),
+        h('span', { className: 'gdt-branch-name' }, baseValue === '' ? '—' : baseValue),
+        h('span', { className: 'gdt-caret' }, '▾'))
         : null
 
       const toolbar = h('div', { className: 'gdt-bar' },
         scopeButtons,
         scope === 'branch' ? branchButton : null,
-        baseSelect,
+        baseButton,
         h('span', { className: 'gdt-summary' }, commits === '' ? summary : `${summary} · ${commits}`),
         h('span', { className: 'gdt-spacer' }),
         h('button', {
@@ -2742,6 +2961,12 @@ window.__ModuleLoader__.load({
           id: 'git-dock-merge',
           order: 101,
         }, MergePicker))
+
+        slots.inject('shell.overlay', () => slots.register({
+          name: 'shell.overlay',
+          id: 'git-dock-base',
+          order: 102,
+        }, BasePicker))
 
         // The review surface is a native right-sidebar tab type. The type and
         // its body are two registrations under the SAME id, and the guide entry
