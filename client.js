@@ -157,7 +157,8 @@ window.__ModuleLoader__.load({
         'commit.amended': '已修订 {sha}',
         'commit.ai': '生成提交信息',
         'commit.aiBusy': '生成中…',
-        'commit.aiHint': '会把已暂存的 diff 发给当前会话模型',
+        'commit.aiHint': '优先使用已暂存的 diff；没有暂存时使用工作区改动，发给当前会话模型',
+        'commit.nothingToDraft': '没有可生成提交信息的改动（先修改或暂存文件）',
         'commit.conventionHint': '已按仓库规范生成：{summary}',
         'commit.charCount': '{n}/{max}',
         'commit.config': '提交规范',
@@ -361,7 +362,8 @@ window.__ModuleLoader__.load({
         'commit.amended': 'Amended {sha}',
         'commit.ai': 'Draft message',
         'commit.aiBusy': 'Drafting…',
-        'commit.aiHint': 'Sends the staged diff to the session model',
+        'commit.aiHint': 'Uses the staged diff, or the working-tree diff when nothing is staged',
+        'commit.nothingToDraft': 'There are no changes to draft a message from (edit or stage files first)',
         'commit.conventionHint': 'Drafted from the repository convention: {summary}',
         'commit.charCount': '{n}/{max}',
         'commit.config': 'Convention',
@@ -2476,6 +2478,11 @@ window.__ModuleLoader__.load({
 
       const draftMessage = async () => {
         if (aiBusy) return
+        const currentFiles = dataRef.current === null ? [] : dataRef.current.files ?? []
+        if (currentFiles.length === 0) {
+          setNotice(t('commit.nothingToDraft'))
+          return
+        }
         setAiBusy(true)
         setActionError(null)
         try {
@@ -2824,7 +2831,7 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               className: 'gdt-btn',
-              disabled: aiBusy || commitBusy || stagedCount === 0,
+              disabled: aiBusy || commitBusy,
               title: t('commit.aiHint'),
               onClick: () => void draftMessage(),
             }, aiBusy ? t('commit.aiBusy') : t('commit.ai')),
