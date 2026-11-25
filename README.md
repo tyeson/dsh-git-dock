@@ -11,7 +11,9 @@ Repository: <https://github.com/tyeson/dsh-git-dock>
 > Status: **P3–P5 complete** — the Qoder-style surface: a ref picker for local
 > branches, remote branches and tags; change review with unified/side-by-side
 > comparisons; staging, discard, commit/amend and model-drafted commit messages;
-> fetch/push/sync; merge with conflict handling; and the `git_branch` tool.
+> fetch/push/sync; merge with conflict handling (one click asks the live model to
+> resolve and stage the conflicts; commit and push stay manual); and the
+> `git_branch` tool.
 
 ## Install
 

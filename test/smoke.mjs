@@ -58,7 +58,13 @@ function makeRepo() {
 function makeContext(cwd, state) {
   const handlers = new Map()
   const tools = []
-  const agents = { turnBoundaryOf: () => ({ openTurnStartSeq: state.running ? 1 : null }) }
+  const agents = {
+    turnBoundaryOf: () => ({ openTurnStartSeq: state.running ? 1 : null }),
+    get: (id) => (id === SESSION
+      ? { followup: async (message) => { agentPrompts.push(message) } }
+      : undefined),
+  }
+  const agentPrompts = []
   const toolsService = {
     register(definition) {
       tools.push(definition)
@@ -101,7 +107,7 @@ function makeContext(cwd, state) {
     },
     effect: (factory) => factory(),
   }
-  return { ctx, handlers, tools, llm }
+  return { ctx, handlers, tools, llm, agentPrompts }
 }
 
 /** Call one API method through the real route handler. */
@@ -139,7 +145,7 @@ function unwrap(result) {
 
 const repoDir = makeRepo()
 const state = { running: false }
-const { ctx, handlers, tools, llm } = makeContext(repoDir, state)
+const { ctx, handlers, tools, llm, agentPrompts } = makeContext(repoDir, state)
 const plugin = await import(PLUGIN)
 plugin.apply(ctx)
 
@@ -275,14 +281,23 @@ const conflicted = unwrap(await callApi(handler, 'merge.apply', { sessionId: SES
 check('merge reports conflicts', conflicted.status === 'conflicts', conflicted.status)
 check('repo reports an open merge', conflicted.repo.operation === 'merge', conflicted.repo.operation)
 check('conflict paths listed', conflicted.repo.conflictPaths.includes('shared.txt'), conflicted.repo.conflictPaths)
+const assisted = unwrap(await callApi(handler, 'merge.assist', { sessionId: SESSION }))
+check('assist notifies the live agent', assisted.notified === true && assisted.conflicts.includes('shared.txt'), assisted)
+const assistPrompt = agentPrompts.length > 0 ? agentPrompts[agentPrompts.length - 1] : null
+check('assist prompt lists the conflict file', assistPrompt !== null && assistPrompt.content[0].text.includes('shared.txt'), assistPrompt)
+check('assist prompt forbids committing and pushing', assistPrompt !== null && assistPrompt.content[0].text.includes('git push'), assistPrompt)
 const earlyComplete = await callApi(handler, 'merge.complete', { sessionId: SESSION })
 check('complete refuses unresolved conflicts', earlyComplete.status === 409 && earlyComplete.body.error.code === 'conflicts-remain', earlyComplete.body)
 const aborted = unwrap(await callApi(handler, 'merge.abort', { sessionId: SESSION }))
 check('abort clears the merge', aborted.repo.operation === 'none', aborted.repo.operation)
+const assistNoMerge = await callApi(handler, 'merge.assist', { sessionId: SESSION })
+check('assist refuses without a merge', assistNoMerge.status === 409 && assistNoMerge.body.error.code === 'no-merge', assistNoMerge.body)
 const previewAgain = unwrap(await callApi(handler, 'merge.preview', { sessionId: SESSION, source: 'conflict-side' }))
 unwrap(await callApi(handler, 'merge.apply', { sessionId: SESSION, confirmToken: previewAgain.confirmToken, confirmed: true }))
 const resolved = unwrap(await callApi(handler, 'merge.resolve', { sessionId: SESSION, path: 'shared.txt' }))
 check('resolve marks the file resolved', resolved.conflicts.length === 0, resolved.conflicts)
+const assistResolved = await callApi(handler, 'merge.assist', { sessionId: SESSION })
+check('assist refuses once conflicts are resolved', assistResolved.status === 409 && assistResolved.body.error.code === 'no-conflicts', assistResolved.body)
 const completed = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
 check('merge completed', completed.repo.operation === 'none' && git(repoDir, 'log', '-1', '--merges', '--format=%s') !== '')
 const noMerge = await callApi(handler, 'merge.abort', { sessionId: SESSION })

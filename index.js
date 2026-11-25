@@ -1034,6 +1034,46 @@ async function resolveConflict(ctx, body, signal) {
   })
 }
 
+/**
+ * Ask the session's live model to resolve every open merge conflict and stage it.
+ * The model only edits and `git add`s; committing and pushing stay manual.
+ */
+async function notifyAgentResolveConflicts(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  if (state.operation !== 'merge') {
+    throw new ApiError('no-merge', 'no merge is in progress', 409, { state })
+  }
+  const conflicts = state.conflictPaths
+  if (conflicts.length === 0) {
+    throw new ApiError('no-conflicts', 'no conflicted files remain; complete the merge instead', 409, { state })
+  }
+  const agents = ctx.get('agents')
+  const agent = agents === undefined || agents === null || typeof agents.get !== 'function'
+    ? undefined
+    : agents.get(body.sessionId)
+  if (agent === undefined || agent === null) {
+    throw new ApiError('session-not-found', 'the session is not live', 404)
+  }
+  if (typeof agent.followup !== 'function') {
+    throw new ApiError('agent-unavailable', 'this session cannot accept a prompt right now', 503)
+  }
+  const prompt = [
+    '当前会话的工作区处于 Git 合并冲突状态，请立即处理这些冲突。',
+    `仓库：${state.repoRoot}`,
+    `当前分支：${state.branch ?? 'detached HEAD'}`,
+    `冲突文件（${conflicts.length} 个）：`,
+    ...conflicts.map((path) => `- ${path}`),
+    '',
+    '要求：',
+    '1. 逐个读取冲突文件，理解双方意图，合并两边改动，保留全部有效逻辑；',
+    '2. 解决后用 `git add <该文件>` 标记为已解决；',
+    '3. 不要执行 git commit、git merge --abort、git push，也不要改动无关文件；',
+    '4. 全部标记完成后，简短汇报每个文件是如何处理的。',
+  ].join('\n')
+  await agent.followup({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })
+  return { notified: true, conflicts, branch: state.branch ?? null }
+}
+
 // ── P3: refs, checkout, staging, commit, remote ───────────────────────────
 
 /** Parse rich for-each-ref lines: name, sha, date, author, upstream, HEAD, subject. */
@@ -2135,6 +2175,11 @@ const API = {
   /** Mark one conflicted path resolved. */
   async 'merge.resolve'(ctx, body, signal) {
     return resolveConflict(ctx, body, signal)
+  },
+
+  /** Ask the live model to resolve and stage every remaining conflict. */
+  async 'merge.assist'(ctx, body, signal) {
+    return notifyAgentResolveConflicts(ctx, body, signal)
   },
 
   /** Check out a local branch, remote branch, tag, or commit. */

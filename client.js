@@ -138,6 +138,12 @@ window.__ModuleLoader__.load({
         'merge.completing': '提交中…',
         'merge.aborting': '放弃中…',
         'merge.noConflicts': '所有冲突已解决，可以完成合并',
+        'merge.resolveAction': '冲突解决',
+        'merge.conflictsResolved': '冲突已解决',
+        'merge.assisting': '通知中…',
+        'merge.assisted': '已通知当前模型处理 {n} 个冲突文件，解决并暂存后请手动完成合并；push 仍需你手动操作',
+        'err.no-conflicts': '没有需要解决的冲突',
+        'err.agent-unavailable': '当前会话暂时无法接收指令',
         'tag.confirm': '签出标记 {name} 会进入游离 HEAD，可基于它新建分支。',
         'tag.confirmYes': '确认签出',
         'panel.tags': '标记',
@@ -336,6 +342,12 @@ window.__ModuleLoader__.load({
         'merge.completing': 'Committing…',
         'merge.aborting': 'Aborting…',
         'merge.noConflicts': 'Every conflict is resolved — the merge can be completed',
+        'merge.resolveAction': 'Resolve conflicts',
+        'merge.conflictsResolved': 'Conflicts resolved',
+        'merge.assisting': 'Notifying…',
+        'merge.assisted': 'The model was asked to resolve and stage {n} conflicted file(s); complete the merge yourself afterwards — pushing stays manual',
+        'err.no-conflicts': 'There are no conflicted files to resolve',
+        'err.agent-unavailable': 'This session cannot accept a prompt right now',
         'tag.confirm': 'Checking out tag {name} leaves a detached HEAD; you can create a branch from it.',
         'tag.confirmYes': 'Check out',
         'panel.tags': 'Tags',
@@ -2214,6 +2226,7 @@ window.__ModuleLoader__.load({
       const [discardTarget, setDiscardTarget] = React.useState(null)
       const [mergeBusy, setMergeBusy] = React.useState(null)
       const [mergeError, setMergeError] = React.useState(null)
+      const [assistBusy, setAssistBusy] = React.useState(false)
       const requestRef = React.useRef(0)
       const dataRef = React.useRef(null)
       const [reloadTick, setReloadTick] = React.useState(0)
@@ -2394,6 +2407,23 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /** Ask the live model to resolve and stage every open conflict. */
+      const notifyConflictSolve = async () => {
+        if (assistBusy) return
+        setAssistBusy(true)
+        setMergeError(null)
+        setActionError(null)
+        try {
+          const value = await callApi('merge.assist', { sessionId })
+          reload()
+          setNotice(t('merge.assisted', { n: value.conflicts.length }))
+        } catch (thrown) {
+          setMergeError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setAssistBusy(false)
+        }
+      }
+
       const runAction = async (operation, done) => {
         setActionError(null)
         try {
@@ -2549,6 +2579,9 @@ window.__ModuleLoader__.load({
       }
 
       const repoInfo = data === null ? null : data.repo
+      const conflictPaths = repoInfo === null || repoInfo === undefined ? [] : repoInfo.conflictPaths ?? []
+      const mergeInProgress = repoInfo !== null && repoInfo !== undefined && repoInfo.operation === 'merge'
+      const hasConflicts = conflictPaths.length > 0
       const branchLabel = repoInfo === null || repoInfo === undefined
         ? ''
         : repoInfo.detached === true
@@ -2827,11 +2860,18 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'gdt-btn',
           'data-dsh-git-dock-merge': '1',
-          disabled: remoteBusy !== null,
+          'data-active': hasConflicts ? 'true' : 'false',
+          disabled: remoteBusy !== null || assistBusy || (mergeInProgress && !hasConflicts),
           onClick: (event) => {
+            if (mergeInProgress) {
+              void notifyConflictSolve()
+              return
+            }
             openMergePicker(sessionId, event.currentTarget, repoInfo)
           },
-        }, t('merge.button')),
+        }, mergeInProgress
+          ? (assistBusy ? t('merge.assisting') : (hasConflicts ? t('merge.resolveAction') : t('merge.conflictsResolved')))
+          : t('merge.button')),
         h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('fetch') },
           remoteBusy === 'fetch' ? t('sync.busy') : t('sync.fetch')),
         h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('push') },
@@ -2839,7 +2879,6 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('sync') },
           remoteBusy === 'sync' ? t('sync.busy') : t('sync.sync'))) : null
 
-      const conflictPaths = repoInfo === null || repoInfo === undefined ? [] : repoInfo.conflictPaths ?? []
       const conflictSection = repoInfo === null || repoInfo === undefined || repoInfo.operation !== 'merge' ? null : h('div', { className: 'gct-merge' },
         h('div', { className: 'gct-config-title' }, t('merge.openTitle', { n: conflictPaths.length })),
         conflictPaths.length === 0
