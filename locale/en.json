@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Git branch dock",
+    "description": "A Git entry under the composer: see the current branch, its ahead/behind and dirty state; check out local branches, remote branches (as tracking branches) and tags, and create a branch from any ref. The right-sidebar review tab lists the working tree's changes or this branch against a base (unified or side-by-side), and supports staging, unstaging, discarding (into a recoverable stash), commit/amend (amend is refused after push), a commit message drafted from the repository's own convention (recent subjects, commitlint config, commit.template, .dsh-git-dock.json), plus fetch, push and commit-and-sync. Merging supports --no-ff, fast-forward only and squash, with a preflight, conflict handling and backup refs; a git_branch tool exposes the same operations to the agent. Writes are serialized per repository and ask for confirmation while the session's turn is open.",
+    "detail": "docs/DETAIL.md"
+  }
+}

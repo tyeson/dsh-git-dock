@@ -1,0 +1,8 @@
+# dsh-git-dock bundle patch.
+#
+# One Host row plus the package's own `dsh.client` half. The Host row installs
+# the fenced `/plugins/dsh-git-dock/api` route; the client half registers the
+# composer-dock chip and the branch panel.
+- insert:
+    - id: git-dock
+      name: 'dsh-git-dock'

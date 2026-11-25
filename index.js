@@ -1,0 +1,2360 @@
+/**
+ * dsh-git-dock — Host half.
+ *
+ * Serves the session's Git state to the browser half over one fenced,
+ * same-origin route prefix (`/plugins/dsh-git-dock/api/*`). The browser never
+ * supplies a path: the working directory is resolved here from the Session id
+ * through `ctx.workingDirectory` (falling back to the immutable header), so a
+ * caller cannot point the plugin at an arbitrary repository.
+ *
+ * Write operations (switch / create) are serialized per repository, guarded by
+ * an `expectHead` optimistic check, and refused while the Session's turn is
+ * open unless the caller explicitly confirms.
+ *
+ * @module dsh-git-dock
+ */
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+
+export const name = 'dsh-git-dock'
+
+/** `sessions` is required; the web carrier is injected optionally in apply(). */
+export const inject = ['sessions']
+
+const ROUTE_PREFIX = '/plugins/dsh-git-dock/api'
+const MAX_BODY_BYTES = 32 * 1024
+const READ_TIMEOUT_MS = 20_000
+const WRITE_TIMEOUT_MS = 60_000
+const OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024
+const STDERR_LIMIT_CHARS = 64_000
+const STATUS_ROW_LIMIT = 4_000
+const FILE_ROW_LIMIT = 2_000
+const DIFF_LINE_LIMIT = 5_000
+const DIFF_OUTPUT_LIMIT = 4 * 1024 * 1024
+const UNTRACKED_READ_LIMIT = 1024 * 1024
+
+/** Stable child environment: no optional locks, no interactive prompts. */
+const GIT_ENV = Object.freeze({
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_TERMINAL_PROMPT: '0',
+  LC_ALL: 'C',
+})
+
+/** Operation markers inside the git directory, with the state they mean. */
+const OPERATION_MARKERS = [
+  ['MERGE_HEAD', 'merge'],
+  ['rebase-merge', 'rebase'],
+  ['rebase-apply', 'rebase'],
+  ['CHERRY_PICK_HEAD', 'cherry-pick'],
+  ['REVERT_HEAD', 'revert'],
+  ['BISECT_LOG', 'bisect'],
+]
+
+/** A request-level failure with a stable code the UI localizes. */
+class ApiError extends Error {
+  /**
+   * @param {string} code - machine-readable code.
+   * @param {string} message - human-readable fallback message.
+   * @param {number} [status] - HTTP status.
+   * @param {object} [details] - extra payload for the client.
+   */
+  constructor(code, message, status = 400, details) {
+    super(message)
+    this.code = code
+    this.status = status
+    this.details = details
+  }
+}
+
+/** First non-empty line of a git failure. */
+function firstLine(text) {
+  const match = /[^\r\n]*/.exec(String(text ?? '').trimStart())
+  return match === null ? '' : match[0].trim()
+}
+
+/** Serialize one JSON response. */
+function sendJson(res, status, value) {
+  if (res.headersSent === true) {
+    res.destroy?.()
+    return
+  }
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(value))
+}
+
+/** Map a thrown value onto the wire error envelope. */
+function sendError(res, error) {
+  if (error instanceof ApiError) {
+    sendJson(res, error.status, {
+      ok: false,
+      error: { code: error.code, message: error.message, details: error.details },
+    })
+    return
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  sendJson(res, 500, { ok: false, error: { code: 'internal', message } })
+}
+
+/** Read a bounded JSON body; empty bodies become `{}`. */
+async function readJsonBody(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk)
+    size += buffer.length
+    if (size > MAX_BODY_BYTES) throw new ApiError('too-large', 'request body too large', 413)
+    chunks.push(buffer)
+  }
+  if (chunks.length === 0) return {}
+  const text = Buffer.concat(chunks).toString('utf8')
+  if (text.trim() === '') return {}
+  try {
+    const parsed = JSON.parse(text)
+    return parsed !== null && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    throw new ApiError('bad-request', 'request body is not valid JSON')
+  }
+}
+
+/**
+ * Spawn one git command and resolve to its stdout.
+ *
+ * @param {string} cwd - directory the command runs in.
+ * @param {readonly string[]} args - argument vector (no shell involved).
+ * @param {{ timeoutMs?: number, signal?: AbortSignal, maxBytes?: number }} [options]
+ * @returns {Promise<string>} stdout.
+ */
+function runGit(cwd, args, options = {}) {
+  const timeoutMs = options.timeoutMs ?? READ_TIMEOUT_MS
+  const maxBytes = options.maxBytes ?? OUTPUT_LIMIT_BYTES
+  return new Promise((resolve, reject) => {
+    /** @type {import('node:child_process').ChildProcess} */
+    let child
+    try {
+      child = spawn('git', args, {
+        cwd,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ...GIT_ENV },
+      })
+    } catch (error) {
+      reject(new ApiError('git-missing', error.message, 503))
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let bytes = 0
+    let settled = false
+    /** @type {NodeJS.Timeout | undefined} */
+    let timer
+    const onAbort = () => {
+      try { child.kill() } catch { /* already gone */ }
+      settle(new ApiError('aborted', 'request aborted', 499))
+    }
+    const settle = (error, value) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      options.signal?.removeEventListener?.('abort', onAbort)
+      if (error === null) resolve(value)
+      else reject(error)
+    }
+    timer = setTimeout(() => {
+      try { child.kill() } catch { /* already gone */ }
+      settle(new ApiError('timeout', `git ${args[0] ?? ''} timed out after ${timeoutMs}ms`, 504))
+    }, timeoutMs)
+    if (options.signal !== undefined) {
+      if (options.signal.aborted) {
+        onAbort()
+        return
+      }
+      options.signal.addEventListener('abort', onAbort, { once: true })
+    }
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      bytes += chunk.length
+      if (bytes > maxBytes) {
+        settle(new ApiError('too-large', 'git output exceeded the size limit', 413))
+        return
+      }
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      if (stderr.length < STDERR_LIMIT_CHARS) stderr += chunk
+    })
+    child.on('error', (error) => {
+      const missing = error.code === 'ENOENT'
+      settle(new ApiError(missing ? 'git-missing' : 'spawn-failed', missing ? 'git executable not found' : error.message, 503))
+    })
+    child.on('close', (code) => {
+      if (code === 0) {
+        settle(null, options.rawResult === true ? { code, stdout, stderr } : stdout)
+        return
+      }
+      // `git diff --no-index` answers 1 when the files differ — the expected
+      // outcome when diffing an untracked file against /dev/null.
+      if (Array.isArray(options.exitCodes) && options.exitCodes.includes(code)) {
+        settle(null, options.rawResult === true ? { code, stdout, stderr } : stdout)
+        return
+      }
+      const detail = stderr.trim()
+      if (/not a git repository/i.test(detail)) {
+        settle(new ApiError('not-repo', 'not a git repository', 409))
+        return
+      }
+      if (/not found/i.test(detail) && /git/i.test(firstLine(detail))) {
+        settle(new ApiError('git-missing', 'git executable not found', 503))
+        return
+      }
+      settle(new ApiError('git-error', firstLine(detail) || `git ${args[0] ?? ''} failed (exit ${code})`, 400, {
+        command: `git ${args.join(' ')}`,
+        detail: detail.slice(0, 4_000),
+      }))
+    })
+  })
+}
+
+/** runGit with the trailing newline removed (single-value reads). */
+async function gitText(cwd, args, options) {
+  const out = await runGit(cwd, args, options)
+  return out.replace(/\r?\n$/, '')
+}
+
+/**
+ * Resolve the session's effective working directory.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {unknown} sessionId - claimed session id.
+ * @returns {{ session: any, cwd: string }}
+ */
+function resolveSessionCwd(ctx, sessionId) {
+  if (typeof sessionId !== 'string' || sessionId === '') {
+    throw new ApiError('bad-request', 'sessionId required')
+  }
+  const session = ctx.sessions.get(sessionId)
+  if (session === undefined) throw new ApiError('session-not-found', 'session is not live', 404)
+  let cwd
+  try {
+    cwd = ctx.get('workingDirectory')?.get(session) ?? session.header?.cwd
+  } catch {
+    cwd = session.header?.cwd
+  }
+  if (typeof cwd !== 'string' || cwd === '') throw new ApiError('no-cwd', 'session has no working directory', 409)
+  return { session, cwd }
+}
+
+/** Whether the session currently has an open turn (agent is working on it). */
+function isSessionRunning(ctx, session) {
+  try {
+    // `ctx.get` is the inject-free read: a bare `ctx.agents` access throws on
+    // Cordis contexts that did not declare the service, which would otherwise
+    // make this guard silently always false.
+    const agents = ctx.get('agents')
+    const boundary = agents?.turnBoundaryOf?.(session)
+    return boundary !== undefined && boundary.openTurnStartSeq !== null
+  } catch {
+    return false
+  }
+}
+
+/** Refuse a name that could be mistaken for an option or is not a ref. */
+function assertSafeRef(ref) {
+  if (typeof ref !== 'string' || ref === '') throw new ApiError('bad-request', 'branch name required')
+  if (ref.length > 250) throw new ApiError('bad-request', 'branch name is too long')
+  if (ref.startsWith('-') || ref.includes('\0') || ref.includes('..') || ref.includes(' ')) {
+    throw new ApiError('bad-request', `invalid branch name: ${ref}`)
+  }
+}
+
+/** Parse `git status --porcelain=v2 -z --branch` output. */
+function parseStatusV2(raw) {
+  const result = {
+    branch: null,
+    detached: false,
+    head: null,
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicts: 0,
+    changed: 0,
+    truncated: false,
+  }
+  const fields = raw.split('\0')
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]
+    if (field === '') continue
+    if (field.startsWith('# ')) {
+      const line = field.slice(2)
+      if (line.startsWith('branch.oid ')) result.head = line.slice('branch.oid '.length).trim()
+      else if (line.startsWith('branch.head ')) {
+        const value = line.slice('branch.head '.length).trim()
+        if (value === '(detached)') result.detached = true
+        else result.branch = value
+      } else if (line.startsWith('branch.upstream ')) result.upstream = line.slice('branch.upstream '.length).trim()
+      else if (line.startsWith('branch.ab ')) {
+        const match = /^\+(\d+)\s+-(\d+)/.exec(line.slice('branch.ab '.length))
+        if (match !== null) {
+          result.ahead = Number(match[1])
+          result.behind = Number(match[2])
+        }
+      }
+      continue
+    }
+    if (field.startsWith('2 ')) {
+      // Rename/copy: one record followed by the original path.
+      countStatus(result, field.slice(2, 4))
+      index += 1
+      continue
+    }
+    if (field.startsWith('1 ')) {
+      countStatus(result, field.slice(2, 4))
+      continue
+    }
+    if (field.startsWith('u ')) {
+      countStatus(result, field.slice(2, 4))
+      result.conflicts += 1
+      continue
+    }
+    if (field.startsWith('? ')) {
+      result.untracked += 1
+      result.changed += 1
+      continue
+    }
+    // `!` (ignored) and anything unknown contribute nothing.
+  }
+  if (result.changed > STATUS_ROW_LIMIT) {
+    result.truncated = true
+    result.changed = STATUS_ROW_LIMIT
+  }
+  return result
+}
+
+/** Count one `XY` status pair into the aggregate buckets. */
+function countStatus(result, xy) {
+  const x = xy[0]
+  const y = xy[1]
+  if (x !== '.' && x !== undefined) result.staged += 1
+  if (y !== '.' && y !== undefined) result.unstaged += 1
+  result.changed += 1
+}
+
+/** Detect an in-progress merge/rebase/cherry-pick in the git directory. */
+async function detectOperation(gitDir) {
+  for (const [marker, operation] of OPERATION_MARKERS) {
+    try {
+      await stat(join(gitDir, marker))
+      return operation
+    } catch {
+      // Not present: keep looking.
+    }
+  }
+  return 'none'
+}
+
+/**
+ * Read the full repository state for one session.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {unknown} sessionId - session id from the request.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} repository state.
+ */
+async function readRepoState(ctx, sessionId, signal) {
+  const { session, cwd } = resolveSessionCwd(ctx, sessionId)
+  let repoRoot
+  try {
+    repoRoot = await gitText(cwd, ['rev-parse', '--show-toplevel'], { signal })
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'not-repo') {
+      throw new ApiError('not-repo', 'session directory is not a git repository', 409, { cwd })
+    }
+    throw error
+  }
+  const gitDir = await gitText(repoRoot, ['rev-parse', '--absolute-git-dir'], { signal })
+  const [statusRaw, operation] = await Promise.all([
+    runGit(repoRoot, ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=normal'], { signal }),
+    detectOperation(gitDir),
+  ])
+  const status = parseStatusV2(statusRaw)
+  const conflictPaths = parseStatusRows(statusRaw)
+    .filter((row) => row.conflict === true)
+    .map((row) => row.path)
+  return {
+    repoRoot,
+    repoName: basename(repoRoot),
+    gitDir,
+    branch: status.branch,
+    detached: status.detached,
+    head: status.head,
+    upstream: status.upstream,
+    ahead: status.ahead,
+    behind: status.behind,
+    operation,
+    conflictPaths,
+    running: isSessionRunning(ctx, session),
+    changes: {
+      staged: status.staged,
+      unstaged: status.unstaged,
+      untracked: status.untracked,
+      conflicts: status.conflicts,
+      changed: status.changed,
+      truncated: status.truncated,
+    },
+    cwd,
+  }
+}
+
+/** Parse NUL-free, tab-separated for-each-ref output. */
+function parseRefLines(raw, kind) {
+  const rows = []
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue
+    const parts = line.split('\t')
+    if (parts.length < 6) continue
+    const name = parts[0]
+    if (name === '') continue
+    if (kind === 'remote' && name.endsWith('/HEAD')) continue
+    rows.push({
+      name,
+      sha: parts[1],
+      committedAt: Number(parts[2]) * 1000,
+      upstream: parts[3] === '' ? null : parts[3],
+      current: parts[4] === '*',
+      subject: parts.slice(5).join('\t'),
+    })
+  }
+  return rows
+}
+
+/**
+ * List local and remote branches.
+ *
+ * @param {string} repoRoot - repository root.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<{ local: object[], remote: object[] }>} branches.
+ */
+async function readBranches(repoRoot, signal) {
+  const format = [
+    '%(refname:short)',
+    '%(objectname:short)',
+    '%(committerdate:unix)',
+    '%(upstream:short)',
+    '%(HEAD)',
+    '%(subject)',
+  ].join('\t')
+  const [localRaw, remoteRaw] = await Promise.all([
+    runGit(repoRoot, ['for-each-ref', `--format=${format}`, 'refs/heads'], { signal }),
+    runGit(repoRoot, ['for-each-ref', `--format=${format}`, 'refs/remotes'], { signal }),
+  ])
+  const local = parseRefLines(localRaw, 'local')
+  local.sort((left, right) => {
+    if (left.current !== right.current) return left.current ? -1 : 1
+    if (right.committedAt !== left.committedAt) return right.committedAt - left.committedAt
+    return left.name.localeCompare(right.name)
+  })
+  const remote = parseRefLines(remoteRaw, 'remote').sort((left, right) => right.committedAt - left.committedAt)
+  return { local, remote }
+}
+
+// ── P1: change lists and comparisons ──────────────────────────────────────
+
+/** One status record from `--porcelain=v2 -z`. */
+function parseStatusRows(raw) {
+  const fields = raw.split('\0')
+  const rows = []
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]
+    if (field === '' || field.startsWith('# ')) continue
+    if (field.startsWith('2 ')) {
+      // Rename/copy: record carries the new path; the original path is the
+      // NEXT NUL field.
+      const parts = field.split(' ')
+      rows.push({ path: parts.slice(9).join(' '), origPath: fields[index + 1], x: field[2], y: field[3] })
+      index += 1
+      continue
+    }
+    if (field.startsWith('1 ')) {
+      const parts = field.split(' ')
+      rows.push({ path: parts.slice(8).join(' '), x: field[2], y: field[3] })
+      continue
+    }
+    if (field.startsWith('u ')) {
+      const parts = field.split(' ')
+      rows.push({ path: parts.slice(10).join(' '), x: field[2], y: field[3], conflict: true })
+      continue
+    }
+    if (field.startsWith('? ')) {
+      rows.push({ path: field.slice(2), untracked: true })
+    }
+  }
+  return rows
+}
+
+/** Parse `git diff --numstat -z` into path → counts. */
+function parseNumstat(raw) {
+  const map = new Map()
+  const fields = raw.split('\0')
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]
+    if (field === '') continue
+    const parts = field.split('\t')
+    if (parts.length < 3) continue
+    const additions = parts[0] === '-' ? null : Number(parts[0])
+    const deletions = parts[1] === '-' ? null : Number(parts[1])
+    const binary = parts[0] === '-'
+    if (parts[2] === '') {
+      const newPath = fields[index + 2]
+      index += 2
+      if (typeof newPath === 'string' && newPath !== '') map.set(newPath, { additions, deletions, binary })
+      continue
+    }
+    map.set(parts[2], { additions, deletions, binary })
+  }
+  return map
+}
+
+/** Parse `git diff --name-status -z` into rows. */
+function parseNameStatus(raw) {
+  const fields = raw.split('\0')
+  const rows = []
+  for (let index = 0; index < fields.length; index += 1) {
+    const status = fields[index]
+    if (status === '') continue
+    const letter = status[0]
+    if (letter === 'R' || letter === 'C') {
+      rows.push({ path: fields[index + 2], origPath: fields[index + 1], status: letter })
+      index += 2
+      continue
+    }
+    const path = fields[index + 1]
+    if (typeof path !== 'string' || path === '') continue
+    rows.push({ path, origPath: null, status: letter === 'T' ? 'M' : letter })
+    index += 1
+  }
+  return rows
+}
+
+/** One-letter status for a porcelain-v2 row. */
+function statusLetter(row) {
+  if (row.untracked === true) return '?'
+  if (row.conflict === true) return 'U'
+  const xy = `${row.x ?? '.'}${row.y ?? '.'}`
+  for (const letter of xy) {
+    if (letter === 'A' || letter === 'D' || letter === 'R' || letter === 'C') return letter
+  }
+  return 'M'
+}
+
+/** Size one untracked file: bounded read, NUL-detected binary, line count. */
+async function sizeUntrackedFile(repoRoot, relativePath) {
+  try {
+    const absolute = join(repoRoot, relativePath)
+    const info = await stat(absolute)
+    if (!info.isFile() || info.size > UNTRACKED_READ_LIMIT) return { additions: null, deletions: 0, binary: false }
+    const data = await readFile(absolute)
+    if (data.subarray(0, 8_000).includes(0)) return { additions: null, deletions: 0, binary: true }
+    const text = data.toString('utf8')
+    const lines = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+    return { additions: lines, deletions: 0, binary: false }
+  } catch {
+    return { additions: null, deletions: 0, binary: false }
+  }
+}
+
+/** Reject a client path that could escape the repository. */
+function assertRepoPath(value) {
+  if (typeof value !== 'string' || value === '') throw new ApiError('bad-request', 'path required')
+  if (value.length > 4_096) throw new ApiError('bad-request', 'path is too long')
+  if (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.includes('\0')) {
+    throw new ApiError('bad-request', 'path must be repository-relative')
+  }
+  for (const segment of value.split('/')) {
+    if (segment === '' || segment === '.' || segment === '..') throw new ApiError('bad-request', 'invalid path')
+  }
+  return value
+}
+
+/**
+ * Resolve the comparison base and its candidate list.
+ *
+ * @param {string} repoRoot - repository root.
+ * @param {unknown} requested - explicit base from the client, if any.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<{ base: string | null, baseCandidates: string[] }>}
+ */
+async function resolveBase(repoRoot, requested, signal) {
+  const candidates = []
+  const push = (name) => {
+    if (typeof name === 'string' && name !== '' && !candidates.includes(name)) candidates.push(name)
+  }
+  try {
+    const symbolic = await gitText(repoRoot, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], { signal })
+    push(symbolic.replace(/^refs\/remotes\//, ''))
+  } catch {
+    // No origin/HEAD: fall through to the usual names.
+  }
+  for (const guess of ['origin/main', 'origin/master', 'main', 'master']) push(guess)
+  try {
+    const branches = await readBranches(repoRoot, signal)
+    for (const branch of branches.remote) push(branch.name)
+    for (const branch of branches.local) push(branch.name)
+  } catch {
+    // Candidate discovery is best-effort; the verified list may be shorter.
+  }
+  const verified = []
+  for (const name of candidates.slice(0, 40)) {
+    try {
+      await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`], { signal })
+      verified.push(name)
+    } catch {
+      // Not a commit ref: skip.
+    }
+  }
+  if (typeof requested === 'string' && requested !== '') {
+    if (!verified.includes(requested)) throw new ApiError('unknown-ref', `base not found: ${requested}`, 404)
+    return { base: requested, baseCandidates: verified.slice(0, 20) }
+  }
+  const preferred = verified.find((name) => name === 'origin/main' || name === 'origin/master' || name === 'main' || name === 'master')
+  return { base: preferred ?? verified[0] ?? null, baseCandidates: verified.slice(0, 20) }
+}
+
+/**
+ * Parse a unified diff into structured hunks.
+ *
+ * @param {string} raw - `git diff --no-color` output.
+ * @returns {{ binary: boolean, hunks: object[], truncated: boolean }} parsed diff.
+ */
+function parseUnifiedDiff(raw) {
+  const hunks = []
+  let current = null
+  let oldNo = 0
+  let newNo = 0
+  let lineCount = 0
+  const binary = /^Binary files .* differ$/m.test(raw)
+  for (const line of raw.split('\n')) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
+    if (header !== null) {
+      current = {
+        oldStart: Number(header[1]),
+        oldLines: header[2] === undefined ? 1 : Number(header[2]),
+        newStart: Number(header[3]),
+        newLines: header[4] === undefined ? 1 : Number(header[4]),
+        lines: [],
+      }
+      hunks.push(current)
+      oldNo = current.oldStart
+      newNo = current.newStart
+      continue
+    }
+    if (current === null) continue
+    if (line.startsWith('\\')) continue
+    const kind = line[0]
+    if (kind !== ' ' && kind !== '+' && kind !== '-') continue
+    lineCount += 1
+    if (lineCount > DIFF_LINE_LIMIT) return { binary, hunks, truncated: true }
+    const text = line.slice(1)
+    if (kind === ' ') {
+      current.lines.push({ kind: ' ', oldNo, newNo, text })
+      oldNo += 1
+      newNo += 1
+    } else if (kind === '-') {
+      current.lines.push({ kind: '-', oldNo, newNo: null, text })
+      oldNo += 1
+    } else {
+      current.lines.push({ kind: '+', oldNo: null, newNo, text })
+      newNo += 1
+    }
+  }
+  return { binary, hunks, truncated: false }
+}
+
+/**
+ * Change list for one scope: the working tree, or the branch against a base.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {object} body - `{ sessionId, scope?, base? }`.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} the change list.
+ */
+async function readChanges(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  const scope = body.scope === 'branch' ? 'branch' : 'worktree'
+  let base = null
+  let baseCandidates = []
+  let commits = 0
+  if (scope === 'branch') {
+    const resolved = await resolveBase(state.repoRoot, body.base, signal)
+    base = resolved.base
+    baseCandidates = resolved.baseCandidates
+    if (base === null) throw new ApiError('no-base', 'no base branch could be resolved', 409)
+    if (base === state.branch) throw new ApiError('same-base', 'the base is the current branch', 400)
+    commits = Number(await gitText(state.repoRoot, ['rev-list', '--count', `${base}..HEAD`], { signal })) || 0
+  }
+  let files = []
+  if (scope === 'worktree') {
+    const [statusRaw, numstatRaw] = await Promise.all([
+      runGit(state.repoRoot, ['status', '--porcelain=v2', '-z', '--untracked-files=normal'], { signal }),
+      runGit(state.repoRoot, ['diff', '--numstat', '-z', 'HEAD'], { signal }).catch(() => ''),
+    ])
+    const counts = parseNumstat(numstatRaw)
+    const rows = parseStatusRows(statusRaw)
+    files = await Promise.all(rows.map(async (row) => {
+      const stats = row.untracked === true ? await sizeUntrackedFile(state.repoRoot, row.path) : counts.get(row.path)
+      return {
+        path: row.path,
+        origPath: typeof row.origPath === 'string' ? row.origPath : null,
+        status: statusLetter(row),
+        staged: row.x !== undefined && row.x !== '.' && row.x !== ' ',
+        unstaged: row.y !== undefined && row.y !== '.' && row.y !== ' ',
+        conflict: row.conflict === true,
+        additions: stats === undefined ? null : stats.additions,
+        deletions: stats === undefined ? null : stats.deletions,
+        binary: stats === undefined ? false : stats.binary,
+      }
+    }))
+  } else {
+    const [nameRaw, numstatRaw] = await Promise.all([
+      runGit(state.repoRoot, ['diff', '--name-status', '-z', `${base}...HEAD`], { signal }),
+      runGit(state.repoRoot, ['diff', '--numstat', '-z', `${base}...HEAD`], { signal }),
+    ])
+    const counts = parseNumstat(numstatRaw)
+    files = parseNameStatus(nameRaw).map((row) => {
+      const stats = counts.get(row.path)
+      return {
+        path: row.path,
+        origPath: row.origPath,
+        status: row.status,
+        staged: true,
+        unstaged: false,
+        conflict: false,
+        additions: stats === undefined ? null : stats.additions,
+        deletions: stats === undefined ? null : stats.deletions,
+        binary: stats === undefined ? false : stats.binary,
+      }
+    })
+  }
+  files.sort((left, right) => left.path.localeCompare(right.path))
+  const truncated = files.length > FILE_ROW_LIMIT
+  return {
+    scope,
+    base,
+    baseCandidates,
+    commits,
+    files: truncated ? files.slice(0, FILE_ROW_LIMIT) : files,
+    truncated,
+    repo: state,
+  }
+}
+
+/**
+ * One file's comparison as structured hunks.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {object} body - `{ sessionId, scope?, base?, path, untracked? }`.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} the comparison.
+ */
+async function readDiff(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  const path = assertRepoPath(body.path)
+  const scope = body.scope === 'branch' ? 'branch' : 'worktree'
+  let args
+  if (scope === 'branch') {
+    const resolved = await resolveBase(state.repoRoot, body.base, signal)
+    if (resolved.base === null) throw new ApiError('no-base', 'no base branch could be resolved', 409)
+    args = ['diff', '--no-color', '--no-ext-diff', '-U3', `${resolved.base}...HEAD`, '--', path]
+  } else if (body.untracked === true) {
+    args = ['diff', '--no-index', '--no-color', '--no-ext-diff', '-U3', '--', '/dev/null', path]
+  } else {
+    args = ['diff', '--no-color', '--no-ext-diff', '-U3', 'HEAD', '--', path]
+  }
+  const raw = await runGit(state.repoRoot, args, { signal, maxBytes: DIFF_OUTPUT_LIMIT, exitCodes: [0, 1] })
+  const parsed = parseUnifiedDiff(raw)
+  return { path, scope, binary: parsed.binary, hunks: parsed.hunks, truncated: parsed.truncated }
+}
+
+// ── P2: merging ───────────────────────────────────────────────────────────
+
+/** Pending merge confirmations: token → details, with a 60s lifetime. */
+const mergeTokens = new Map()
+const MERGE_TOKEN_TTL_MS = 60_000
+const BACKUP_REF_LIMIT = 20
+
+/** Normalize a requested merge mode; unknown values fall back to `--no-ff`. */
+function normalizeMode(mode) {
+  return mode === 'ff-only' || mode === 'squash' ? mode : 'no-ff'
+}
+
+/** Mint one single-use confirmation for the merge the preview showed. */
+function issueMergeToken(details) {
+  const token = randomUUID()
+  mergeTokens.set(token, Object.assign({}, details, { expires: Date.now() + MERGE_TOKEN_TTL_MS }))
+  return token
+}
+
+/** Consume a merge confirmation, refusing another Session's or a stale one. */
+function takeMergeToken(token, sessionId) {
+  if (typeof token !== 'string' || token === '') {
+    throw new ApiError('merge-token', 'merge confirmation required; run the preview again', 409)
+  }
+  const entry = mergeTokens.get(token)
+  if (entry === undefined) {
+    throw new ApiError('merge-token', 'merge confirmation not found; run the preview again', 409)
+  }
+  mergeTokens.delete(token)
+  if (entry.expires < Date.now()) {
+    throw new ApiError('merge-token', 'merge confirmation expired; run the preview again', 409)
+  }
+  if (entry.sessionId !== sessionId) {
+    throw new ApiError('merge-token', 'merge confirmation belongs to another session', 409)
+  }
+  return entry
+}
+
+/** Keep only the newest backup refs of one repository. */
+async function pruneBackupRefs(repoRoot, signal) {
+  try {
+    const raw = await gitText(repoRoot, ['for-each-ref', '--sort=creatordate', '--format=%(refname)', 'refs/dsh/backup'], { signal })
+    const refs = raw.split('\n').filter((ref) => ref !== '')
+    for (const ref of refs.slice(0, Math.max(0, refs.length - BACKUP_REF_LIMIT))) {
+      await runGit(repoRoot, ['update-ref', '-d', ref], { signal })
+    }
+  } catch {
+    // Retention is housekeeping; never fail the operation on it.
+  }
+}
+
+/** Record `HEAD` under `refs/dsh/backup/<stamp>/<label>` before a rewrite. */
+async function backupHead(repoRoot, label, signal) {
+  try {
+    const head = (await gitText(repoRoot, ['rev-parse', 'HEAD'], { signal })).trim()
+    if (head === '') return null
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '')
+    const safeLabel = String(label ?? 'auto').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)
+    const ref = `refs/dsh/backup/${stamp}/${safeLabel}`
+    await runGit(repoRoot, ['update-ref', ref, head], { signal })
+    await pruneBackupRefs(repoRoot, signal)
+    return { ref, commit: head }
+  } catch {
+    return null
+  }
+}
+
+/** Verify that `source` resolves to a commit, and is safe as an argument. */
+async function assertSourceRef(repoRoot, source, signal) {
+  if (typeof source !== 'string' || source === '') throw new ApiError('bad-request', 'source branch required')
+  try {
+    assertSafeRef(source)
+  } catch {
+    throw new ApiError('unknown-ref', `unknown ref: ${source}`, 404)
+  }
+  try {
+    await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${source}^{commit}`], { signal })
+  } catch {
+    throw new ApiError('unknown-ref', `unknown ref: ${source}`, 404)
+  }
+  return source
+}
+
+/** Summarize what merging `source` would bring, without touching the tree. */
+async function previewMerge(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  if (state.operation !== 'none') {
+    throw new ApiError('operation-in-progress', `a ${state.operation} is in progress; finish or abort it first`, 409, {
+      operation: state.operation,
+      state,
+    })
+  }
+  const mode = normalizeMode(body.mode)
+  const source = await assertSourceRef(state.repoRoot, body.source, signal)
+  if (state.detached === true) throw new ApiError('detached', 'cannot merge on a detached HEAD', 409, { state })
+  if (source === state.branch) throw new ApiError('same-branch', 'the source is the current branch', 400)
+  const sourceSha = (await gitText(state.repoRoot, ['rev-parse', `${source}^{commit}`], { signal })).trim()
+  const mergeBase = (await gitText(state.repoRoot, ['merge-base', 'HEAD', sourceSha], { signal })).trim()
+  let kind = 'merge'
+  if (mergeBase === sourceSha) kind = 'up-to-date'
+  else if (mergeBase === state.head) kind = 'fast-forward'
+  if (mode === 'ff-only' && kind === 'merge') {
+    throw new ApiError('not-fast-forward', `the current branch cannot fast-forward to ${source}`, 409, { kind, source })
+  }
+  let conflicts = []
+  if (kind === 'merge') {
+    const tree = await runGit(state.repoRoot, ['merge-tree', '--write-tree', '--name-only', 'HEAD', sourceSha], {
+      signal,
+      exitCodes: [0, 1],
+    })
+    const lines = tree.split('\n')
+    const blank = lines.findIndex((line) => line === '')
+    const header = blank === -1 ? lines : lines.slice(0, blank)
+    conflicts = header.slice(1).map((line) => line.trim()).filter((line) => line !== '')
+  }
+  let files = []
+  let additions = 0
+  let deletions = 0
+  let fileCount = 0
+  if (kind !== 'up-to-date') {
+    const numstat = await runGit(state.repoRoot, ['diff', '--numstat', '-z', 'HEAD', sourceSha], { signal })
+    const counts = parseNumstat(numstat)
+    fileCount = counts.size
+    files = [...counts.entries()].slice(0, 200).map(([path, stats]) => ({
+      path,
+      additions: stats.additions,
+      deletions: stats.deletions,
+      binary: stats.binary,
+    }))
+    for (const stats of counts.values()) {
+      additions += stats.additions ?? 0
+      deletions += stats.deletions ?? 0
+    }
+  }
+  return {
+    source,
+    mode,
+    kind,
+    files,
+    fileCount,
+    additions,
+    deletions,
+    conflicts,
+    confirmToken: issueMergeToken({ sessionId: body.sessionId, head: state.head, source, mode }),
+    repo: state,
+  }
+}
+
+/** Perform the merge the preview confirmed. */
+async function applyMerge(ctx, body, signal) {
+  const entry = takeMergeToken(body.confirmToken, body.sessionId)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'none') {
+      throw new ApiError('operation-in-progress', `a ${before.operation} is in progress; finish or abort it first`, 409, {
+        operation: before.operation,
+        state: before,
+      })
+    }
+    if (before.head !== entry.head) {
+      throw new ApiError('stale', 'the repository changed since the preview; run it again', 409, { state: before })
+    }
+    if (before.running === true && body.confirmed !== true) {
+      throw new ApiError('running', 'the session is running; the merge needs explicit confirmation', 409, { state: before })
+    }
+    const source = await assertSourceRef(before.repoRoot, entry.source, signal)
+    const backup = await backupHead(before.repoRoot, `pre-merge-${entry.mode}`, signal)
+    const args = entry.mode === 'ff-only'
+      ? ['merge', '--ff-only', '--no-edit', source]
+      : entry.mode === 'squash'
+        ? ['merge', '--squash', source]
+        : ['merge', '--no-ff', '--no-edit', source]
+    const result = await runGit(before.repoRoot, args, {
+      signal,
+      timeoutMs: WRITE_TIMEOUT_MS,
+      rawResult: true,
+      exitCodes: [0, 1],
+    })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    const conflicts = after.conflictPaths
+    if (result.code === 0) {
+      return {
+        status: entry.mode === 'squash' ? 'squashed' : 'merged',
+        source,
+        mode: entry.mode,
+        conflicts: [],
+        backup,
+        repo: after,
+      }
+    }
+    if (conflicts.length > 0) {
+      return { status: 'conflicts', source, mode: entry.mode, conflicts, backup, repo: after }
+    }
+    if (entry.mode === 'ff-only') {
+      throw new ApiError('not-fast-forward', `the current branch cannot fast-forward to ${source}`, 409, { state: after })
+    }
+    throw new ApiError('merge-failed', firstLine(result.stderr) || 'git merge failed', 400, {
+      detail: result.stderr.slice(0, 4_000),
+    })
+  })
+}
+
+/** Abort an in-progress merge. */
+async function abortMerge(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409)
+    await runGit(before.repoRoot, ['merge', '--abort'], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Commit the resolved merge that is still open. */
+async function completeMerge(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409)
+    if (before.conflictPaths.length > 0) {
+      throw new ApiError('conflicts-remain', 'resolve every conflicted file first', 409, { conflicts: before.conflictPaths })
+    }
+    const result = await runGit(before.repoRoot, ['commit', '--no-edit'], {
+      signal,
+      timeoutMs: WRITE_TIMEOUT_MS,
+      rawResult: true,
+      exitCodes: [0, 1],
+    })
+    if (result.code !== 0) {
+      throw new ApiError('merge-failed', firstLine(result.stderr) || 'git commit failed', 400, {
+        detail: result.stderr.slice(0, 4_000),
+      })
+    }
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Mark one conflicted path resolved (`git add`). */
+async function resolveConflict(ctx, body, signal) {
+  const path = assertRepoPath(body.path)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409)
+    if (!before.conflictPaths.includes(path)) {
+      throw new ApiError('not-conflicted', `not a conflicted path: ${path}`, 400, { conflicts: before.conflictPaths })
+    }
+    await runGit(before.repoRoot, ['add', '--', path], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    return { repo: after, conflicts: after.conflictPaths }
+  })
+}
+
+// ── P3: refs, checkout, staging, commit, remote ───────────────────────────
+
+/** Parse rich for-each-ref lines: name, sha, date, author, upstream, HEAD, subject. */
+function parseRichRefs(raw) {
+  const rows = []
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue
+    const parts = line.split('\t')
+    if (parts.length < 7) continue
+    rows.push({
+      name: parts[0],
+      sha: parts[1],
+      committedAt: Number(parts[2]) * 1000,
+      author: parts[3],
+      upstream: parts[4] === '' ? null : parts[4],
+      current: parts[5] === '*',
+      subject: parts.slice(6).join('\t'),
+    })
+  }
+  return rows
+}
+
+/** List local branches, remote branches and tags with row metadata. */
+async function readRefs(repoRoot, signal) {
+  const branchFormat = [
+    '%(refname:short)',
+    '%(objectname:short)',
+    '%(committerdate:unix)',
+    '%(authorname)',
+    '%(upstream:short)',
+    '%(HEAD)',
+    '%(subject)',
+  ].join('\t')
+  const tagFormat = [
+    '%(refname:short)',
+    '%(objectname:short)',
+    '%(creatordate:unix)',
+    '%(objecttype)',
+    '%(subject)',
+  ].join('\t')
+  const [localRaw, remoteRaw, tagRaw] = await Promise.all([
+    runGit(repoRoot, ['for-each-ref', `--format=${branchFormat}`, 'refs/heads'], { signal }),
+    runGit(repoRoot, ['for-each-ref', `--format=${branchFormat}`, 'refs/remotes'], { signal }),
+    runGit(repoRoot, ['for-each-ref', `--format=${tagFormat}`, 'refs/tags'], { signal }),
+  ])
+  const local = parseRichRefs(localRaw)
+  local.sort((left, right) => {
+    if (left.current !== right.current) return left.current ? -1 : 1
+    if (right.committedAt !== left.committedAt) return right.committedAt - left.committedAt
+    return left.name.localeCompare(right.name)
+  })
+  const localNames = new Set(local.map((branch) => branch.name))
+  const remote = parseRichRefs(remoteRaw)
+    .filter((branch) => !branch.name.endsWith('/HEAD'))
+    .map((branch) => {
+      const slash = branch.name.indexOf('/')
+      const shortName = slash === -1 ? branch.name : branch.name.slice(slash + 1)
+      return Object.assign({}, branch, {
+        remote: slash === -1 ? '' : branch.name.slice(0, slash),
+        shortName,
+        hasLocal: localNames.has(shortName),
+      })
+    })
+    .sort((left, right) => right.committedAt - left.committedAt)
+  const tags = []
+  for (const line of tagRaw.split('\n')) {
+    if (line.trim() === '') continue
+    const parts = line.split('\t')
+    if (parts.length < 5) continue
+    tags.push({
+      name: parts[0],
+      sha: parts[1],
+      committedAt: Number(parts[2]) * 1000,
+      annotated: parts[3] === 'tag',
+      subject: parts.slice(4).join('\t'),
+    })
+  }
+  tags.sort((left, right) => right.committedAt - left.committedAt)
+  return { local, remote, tags }
+}
+
+/** Validate an array of repository-relative paths. */
+function normalizePaths(value) {
+  if (!Array.isArray(value) || value.length === 0) throw new ApiError('bad-request', 'paths required')
+  if (value.length > 500) throw new ApiError('bad-request', 'too many paths')
+  return value.map((path) => assertRepoPath(path))
+}
+
+/** Check out a local branch, a remote branch (as a tracking branch), a tag, or a commit. */
+async function checkoutRef(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertFreshHead(before, body.expectHead)
+    assertNotBusy(before, body.confirmed)
+    const target = body.target !== null && typeof body.target === 'object' ? body.target : {}
+    const kind = target.kind
+    const name = target.name
+    if (!['local', 'remote', 'tag', 'commit'].includes(kind)) throw new ApiError('bad-request', 'unknown checkout target')
+    if (typeof name !== 'string' || name === '') throw new ApiError('bad-request', 'checkout target required')
+    if (kind === 'commit') {
+      if (!/^[0-9a-f]{7,40}$/i.test(name)) throw new ApiError('bad-request', 'invalid commit id')
+    } else {
+      try {
+        assertSafeRef(name)
+      } catch {
+        throw new ApiError('unknown-ref', `unknown ref: ${name}`, 404)
+      }
+    }
+    if (kind === 'tag' && body.confirmed !== true) {
+      throw new ApiError('detached-confirm', 'checking out a tag leaves a detached HEAD', 409, { target })
+    }
+    const backup = await backupHead(before.repoRoot, `pre-checkout-${kind}`, signal)
+    if (kind === 'local') {
+      await assertLocalBranch(before.repoRoot, name, signal)
+      if (before.branch !== name || before.detached === true) {
+        await runGit(before.repoRoot, ['switch', '--no-guess', '--end-of-options', name], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+      }
+    } else if (kind === 'remote') {
+      const slash = name.indexOf('/')
+      const shortName = slash === -1 ? name : name.slice(slash + 1)
+      if (shortName === '') throw new ApiError('unknown-ref', `unknown remote branch: ${name}`, 404)
+      const localExists = await runGit(before.repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${shortName}`], { signal })
+        .then(() => true, () => false)
+      if (localExists) {
+        await runGit(before.repoRoot, ['switch', '--no-guess', '--end-of-options', shortName], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+      } else {
+        await runGit(before.repoRoot, ['switch', '-c', shortName, '--track', name], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+      }
+    } else if (kind === 'tag') {
+      await runGit(before.repoRoot, ['rev-parse', '--verify', '--quiet', `refs/tags/${name}`], { signal })
+      await runGit(before.repoRoot, ['switch', '--detach', `refs/tags/${name}`], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    } else {
+      await runGit(before.repoRoot, ['switch', '--detach', name], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    }
+    return {
+      repo: await readRepoState(ctx, body.sessionId, signal),
+      previousBranch: before.detached === true ? null : before.branch,
+      backup,
+    }
+  })
+}
+
+/** Stage paths (or everything). */
+async function stagePaths(ctx, body, signal) {
+  const paths = body.all === true ? [] : normalizePaths(body.paths)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation === 'merge') throw new ApiError('merge-open', 'complete the merge first', 409, { state: before })
+    const args = body.all === true ? ['add', '-A'] : ['add', '--', ...paths]
+    await runGit(before.repoRoot, args, { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Unstage paths (or everything). */
+async function unstagePaths(ctx, body, signal) {
+  const paths = body.all === true ? [] : normalizePaths(body.paths)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    const run = async (args) => {
+      const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+      return result.code === 0
+    }
+    if (body.all === true) {
+      if (!(await run(['reset', '-q', 'HEAD', '--', '.']))) await run(['rm', '--cached', '-r', '--quiet', '--', '.'])
+    } else if (!(await run(['restore', '--staged', '--', ...paths]))) {
+      await run(['reset', '-q', 'HEAD', '--', ...paths])
+    }
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Discard paths: stash them aside (recoverable) after recording a backup ref. */
+async function discardPaths(ctx, body, signal) {
+  const paths = normalizePaths(body.paths)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'none') throw new ApiError('operation-in-progress', `a ${before.operation} is in progress`, 409, { state: before })
+    const backup = await backupHead(before.repoRoot, 'pre-discard', signal)
+    const stamp = new Date().toISOString()
+    const result = await runGit(
+      before.repoRoot,
+      ['stash', 'push', '--include-untracked', '-m', `dsh-git-dock discard ${stamp}`, '--', ...paths],
+      { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS },
+    )
+    const clean = /No local changes to save/i.test(result.stderr) || /No local changes to save/i.test(result.stdout)
+    if (result.code !== 0 && !clean) {
+      throw new ApiError('discard-failed', firstLine(result.stderr) || 'git stash failed', 400, { detail: result.stderr.slice(0, 4_000) })
+    }
+    return { repo: await readRepoState(ctx, body.sessionId, signal), backup, stashed: !clean, message: `dsh-git-dock discard ${stamp}` }
+  })
+}
+
+/** Refuse changing pushed history: is HEAD contained in its upstream? */
+async function assertHeadNotPushed(repoRoot, signal) {
+  let upstream
+  try {
+    upstream = (await gitText(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { signal })).trim()
+  } catch {
+    return
+  }
+  if (upstream === '') return
+  const pushed = await runGit(repoRoot, ['merge-base', '--is-ancestor', 'HEAD', upstream], { signal })
+    .then(() => true, () => false)
+  if (pushed) throw new ApiError('amend-pushed', 'HEAD is already pushed; amending it is disabled', 409, { upstream })
+}
+
+/** Total commit-message cap, overridable per repository or by the saved config. */
+async function commitTotalLimit(repoRoot) {
+  const override = await readTextIfExists(join(repoRoot, '.dsh-git-dock.json'), 16 * 1024)
+  if (override !== null) {
+    try {
+      const parsed = JSON.parse(override)
+      const limit = parsed.commit !== undefined && parsed.commit !== null ? parsed.commit.totalMaxLength : undefined
+      if (typeof limit === 'number' && limit >= 100 && limit <= 5_000) return limit
+    } catch {
+      // Fall through to the saved config.
+    }
+  }
+  const saved = await readSavedCommitConfig()
+  if (saved !== null && typeof saved.totalMaxLength === 'number') return saved.totalMaxLength
+  return DEFAULT_COMMIT_CONVENTION.totalMaxLength
+}
+
+/** Commit staged changes, optionally amending the tip. */
+async function commitChanges(ctx, body, signal) {
+  const message = typeof body.message === 'string' ? body.message.replace(/\r\n?/g, '\n').trim() : ''
+  if (message === '') throw new ApiError('message-required', 'a commit message is required', 400)
+  const amend = body.amend === true
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  const totalLimit = await commitTotalLimit(repoRoot)
+  if (message.length > totalLimit) {
+    throw new ApiError('message-too-long', `the commit message exceeds ${totalLimit} characters`, 400, { limit: totalLimit })
+  }
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation === 'merge') throw new ApiError('merge-open', 'complete the merge first', 409, { state: before })
+    if (before.operation !== 'none') throw new ApiError('operation-in-progress', `a ${before.operation} is in progress`, 409, { state: before })
+    if (amend) await assertHeadNotPushed(before.repoRoot, signal)
+    if (!amend && before.changes.staged === 0) throw new ApiError('nothing-staged', 'no staged changes to commit', 409)
+    const args = amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message]
+    const result = await runGit(before.repoRoot, args, {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: WRITE_TIMEOUT_MS,
+    })
+    if (result.code !== 0) {
+      throw new ApiError('commit-failed', firstLine(result.stderr) || 'git commit failed', 400, { detail: result.stderr.slice(0, 4_000) })
+    }
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    const sha = (await gitText(after.repoRoot, ['rev-parse', '--short', 'HEAD'], { signal })).trim()
+    const subject = firstLine(await gitText(after.repoRoot, ['log', '-1', '--format=%s'], { signal }))
+    return { repo: after, commit: { sha, subject, amend } }
+  })
+}
+
+/** Resolve the model route a commit suggestion should use (session first). */
+function commitModelRoute(ctx, session) {
+  try {
+    const context = session.requestContext()
+    if (context !== null && context !== undefined && typeof context.provider === 'string' && typeof context.model === 'string') {
+      return { provider: context.provider, model: context.model }
+    }
+  } catch {
+    // No request yet: fall back to the default selection.
+  }
+  try {
+    const selection = ctx.get('agentDefaultModel')?.currentSelection()
+    if (selection !== null && selection !== undefined && typeof selection.provider === 'string' && typeof selection.model === 'string') {
+      return { provider: selection.provider, model: selection.model }
+    }
+  } catch {
+    // Fall through.
+  }
+  return null
+}
+
+/** The built-in convention used when the repository declares nothing stricter. */
+const DEFAULT_COMMIT_CONVENTION = Object.freeze({
+  format: 'type(scope): 中文描述',
+  types: ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'build', 'ci', 'chore', 'revert'],
+  scopeRequired: true,
+  language: 'zh',
+  maxLength: null,
+  totalMaxLength: 500,
+  trailingPeriod: false,
+  vague: ['update', 'fix bugs', 'fix bug', 'bugfix', 'misc changes', 'misc', 'cleanup', 'changes'],
+})
+
+/** Files that may declare the repository's commit-message convention. */
+const CONVENTION_FILES = [
+  'commitlint.config.js',
+  'commitlint.config.cjs',
+  'commitlint.config.mjs',
+  '.commitlintrc',
+  '.commitlintrc.json',
+  '.commitlintrc.yml',
+  '.commitlintrc.yaml',
+  '.commitlintrc.js',
+  '.czrc',
+  '.cz-config.js',
+  '.gitlint',
+]
+
+/** Read a small text file, or null when absent/too large. */
+async function readTextIfExists(path, limit) {
+  try {
+    const info = await stat(path)
+    if (!info.isFile() || info.size > limit) return null
+    return await readFile(path, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/** DSH home directory (env override first, then ~/.dsh). */
+function dshHomePath() {
+  const fromEnv = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME : ''
+  return fromEnv !== '' ? fromEnv : join(homedir(), '.dsh')
+}
+
+/** Plugin-owned commit-convention store path. */
+function commitConfigPath() {
+  return join(dshHomePath(), 'dsh-git-dock', 'commit-convention.json')
+}
+
+/** Sanitize one saved commit config; null when nothing usable remains. */
+function sanitizeSavedCommitConfig(raw) {
+  if (raw === null || typeof raw !== 'object') return null
+  const config = {}
+  if (Array.isArray(raw.types)) {
+    const types = raw.types.map(String).map((type) => type.trim()).filter((type) => /^[a-z][a-z0-9-]*$/.test(type)).slice(0, 30)
+    if (types.length > 0) config.types = types
+  }
+  if (raw.scopeRequired === true || raw.scopeRequired === false) config.scopeRequired = raw.scopeRequired
+  if (raw.language === 'zh' || raw.language === 'en') config.language = raw.language
+  if (raw.maxLength === null) config.maxLength = null
+  else if (typeof raw.maxLength === 'number' && raw.maxLength >= 20 && raw.maxLength <= 300) config.maxLength = raw.maxLength
+  if (typeof raw.totalMaxLength === 'number' && raw.totalMaxLength >= 100 && raw.totalMaxLength <= 5_000) config.totalMaxLength = raw.totalMaxLength
+  if (Array.isArray(raw.vague)) {
+    config.vague = raw.vague.map(String).map((term) => term.trim()).filter((term) => term !== '').slice(0, 30)
+  }
+  return Object.keys(config).length === 0 ? null : config
+}
+
+/** Read the saved (global) commit convention, if any. */
+async function readSavedCommitConfig() {
+  const text = await readTextIfExists(commitConfigPath(), 32 * 1024)
+  if (text === null) return null
+  try {
+    const parsed = JSON.parse(text)
+    const raw = parsed !== null && typeof parsed === 'object' && parsed.commit !== undefined ? parsed.commit : parsed
+    return sanitizeSavedCommitConfig(raw)
+  } catch {
+    return null
+  }
+}
+
+/** Persist the saved (global) commit convention. */
+async function writeSavedCommitConfig(config) {
+  const path = commitConfigPath()
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `${JSON.stringify({ commit: config }, null, 2)}\n`, 'utf8')
+}
+
+/** Remove the saved commit convention. */
+async function clearSavedCommitConfig() {
+  try {
+    await rm(commitConfigPath(), { force: true })
+  } catch {
+    // Already absent.
+  }
+}
+
+/** The serializable view of one convention profile. */
+function conventionView(profile) {
+  return {
+    types: profile.allowedTypes,
+    scopes: profile.allowedScopes,
+    suggestedScopes: profile.scopes.map((scope) => scope.name),
+    scopeRequired: profile.scopeRequired,
+    language: profile.language,
+    maxLength: profile.maxLength,
+    totalMaxLength: profile.totalMaxLength,
+    vague: profile.vague,
+    sources: profile.sources,
+  }
+}
+
+/** Extract a quoted array element list after a key (`type-enum: ['feat', ...]`). */function extractQuotedList(text, key) {
+  const index = text.indexOf(key)
+  if (index === -1) return []
+  const slice = text.slice(index, index + 2_000)
+  // commitlint's rule shape is `[<level>, 'always'|'never', [...values]]`, so
+  // start at the bracket AFTER the level token instead of the first bracket.
+  const level = /['"](?:always|never|warn|error)['"]/.exec(slice)
+  let open
+  if (level !== null) {
+    const after = slice.indexOf('[', level.index + level[0].length)
+    open = after === -1 ? slice.indexOf('[') : after
+  } else {
+    open = slice.indexOf('[')
+  }
+  if (open === -1) return []
+  const close = slice.indexOf(']', open)
+  if (close === -1) return []
+  return [...slice.slice(open + 1, close).matchAll(/['"]([^'"]{1,40})['"]/g)]
+    .map((match) => match[1])
+    .filter((name) => !['always', 'never', 'warn', 'error'].includes(name))
+}
+
+/** Extract a `- item` YAML list after a key. */
+function extractYamlList(text, key) {
+  const index = text.indexOf(key)
+  if (index === -1) return []
+  const names = []
+  for (const line of text.slice(index, index + 1_200).split('\n').slice(1)) {
+    const match = /^\s*-\s*['"]?([A-Za-z][\w-]*)['"]?\s*$/.exec(line)
+    if (match === null) {
+      if (names.length > 0 && line.trim() !== '') break
+      continue
+    }
+    names.push(match[1])
+    if (names.length >= 20) break
+  }
+  return names
+}
+
+/** Extract `"type-enum"`/`"scope-enum"` values from a commitlint config text. */
+function extractCommitlintRules(text) {
+  const types = extractQuotedList(text, 'type-enum')
+  const scopes = extractQuotedList(text, 'scope-enum')
+  const yamlTypes = types.length === 0 ? extractYamlList(text, 'type-enum') : []
+  const yamlScopes = scopes.length === 0 ? extractYamlList(text, 'scope-enum') : []
+  const headerMax = /header-max-length['"]?\s*[:=]\s*\[([^\]]{0,120})\]/.exec(text)
+  let maxLength = null
+  if (headerMax !== null) {
+    const numbers = [...headerMax[1].matchAll(/\d+/g)].map((match) => Number(match[0]))
+    if (numbers.length > 0) maxLength = numbers[numbers.length - 1]
+  }
+  return {
+    types: types.length > 0 ? types : yamlTypes,
+    scopes: scopes.length > 0 ? scopes : yamlScopes,
+    maxLength: Number.isFinite(maxLength) ? maxLength : null,
+  }
+}
+
+/**
+ * Read the repository's commit-message conventions from history and config.
+ *
+ * @param {string} repoRoot - repository root.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} a convention profile.
+ */
+async function detectCommitConventions(repoRoot, signal) {
+  const profile = {
+    conventional: true,
+    hasHistory: false,
+    scopeRequired: DEFAULT_COMMIT_CONVENTION.scopeRequired,
+    vague: DEFAULT_COMMIT_CONVENTION.vague.slice(),
+    types: [],
+    scopes: [],
+    allowedTypes: DEFAULT_COMMIT_CONVENTION.types.slice(),
+    allowedScopes: [],
+    language: DEFAULT_COMMIT_CONVENTION.language,
+    maxLength: DEFAULT_COMMIT_CONVENTION.maxLength,
+    totalMaxLength: DEFAULT_COMMIT_CONVENTION.totalMaxLength,
+    trailingPeriod: DEFAULT_COMMIT_CONVENTION.trailingPeriod,
+    samples: [],
+    template: null,
+    sources: ['default'],
+  }
+  let subjects = []
+  try {
+    subjects = (await gitText(repoRoot, ['log', '-40', '--format=%s'], { signal })).split('\n').filter((line) => line !== '')
+  } catch {
+    subjects = []
+  }
+  const conventionalRe = /^([A-Za-z][A-Za-z0-9-]*)(\([^)]{1,40}\))?!?: (.+)$/
+  const typeCounts = new Map()
+  const scopeCounts = new Map()
+  let conventionalHits = 0
+  let cjk = 0
+  let withPeriod = 0
+  for (const subject of subjects) {
+    const match = conventionalRe.exec(subject)
+    if (match !== null) {
+      conventionalHits += 1
+      typeCounts.set(match[1], (typeCounts.get(match[1]) ?? 0) + 1)
+      if (match[2] !== undefined) {
+        const scope = match[2].slice(1, -1)
+        scopeCounts.set(scope, (scopeCounts.get(scope) ?? 0) + 1)
+      }
+    }
+    if (/[\u4e00-\u9fff]/.test(subject)) cjk += 1
+    if (/[.。]$/.test(subject)) withPeriod += 1
+  }
+  if (subjects.length > 0) {
+    profile.hasHistory = true
+    profile.sources.push('log')
+    profile.types = [...typeCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 8)
+      .map(([name, count]) => ({ name, count }))
+    profile.scopes = [...scopeCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 8)
+      .map(([name, count]) => ({ name, count }))
+    // Only a sizeable, uniformly English history overrides the Chinese default.
+    if (subjects.length >= 10 && cjk === 0 && conventionalHits / subjects.length >= 0.5) profile.language = 'en'
+    profile.trailingPeriod = withPeriod > subjects.length * 0.3
+    profile.samples = subjects.slice(0, 5)
+  }
+  for (const name of CONVENTION_FILES) {
+    const text = await readTextIfExists(join(repoRoot, name), 64 * 1024)
+    if (text === null) continue
+    profile.sources.push(name)
+    const rules = extractCommitlintRules(text)
+    if (rules.types.length > 0) profile.allowedTypes = rules.types
+    if (rules.scopes.length > 0) profile.allowedScopes = rules.scopes
+    if (rules.maxLength !== null) profile.maxLength = rules.maxLength
+  }
+  const pkg = await readTextIfExists(join(repoRoot, 'package.json'), 256 * 1024)
+  if (pkg !== null) {
+    try {
+      const parsed = JSON.parse(pkg)
+      const rules = parsed.commitlint !== undefined && parsed.commitlint.rules !== undefined ? parsed.commitlint.rules : null
+      if (rules !== null) {
+        const types = rules['type-enum']
+        const scopes = rules['scope-enum']
+        if (Array.isArray(types) && types.length > 2) profile.allowedTypes = types.slice(2).map(String)
+        if (Array.isArray(scopes) && scopes.length > 2) profile.allowedScopes = scopes.slice(2).map(String)
+        const header = rules['header-max-length']
+        if (Array.isArray(header) && header.length > 2 && typeof header[2] === 'number') profile.maxLength = header[2]
+        profile.sources.push('package.json#commitlint')
+      }
+    } catch {
+      // A malformed manifest is not a convention source.
+    }
+  }
+  try {
+    const templatePath = (await gitText(repoRoot, ['config', '--get', 'commit.template'], { signal })).trim()
+    if (templatePath !== '') {
+      const absolute = isAbsolute(templatePath) ? templatePath : join(repoRoot, templatePath)
+      const text = await readTextIfExists(absolute, 8 * 1024)
+      if (text !== null && text.trim() !== '') profile.template = text.slice(0, 1_500)
+    }
+  } catch {
+    // No commit template configured.
+  }
+  const savedConfig = await readSavedCommitConfig()
+  if (savedConfig !== null) {
+    profile.sources.push('saved-config')
+    if (savedConfig.types !== undefined) profile.allowedTypes = savedConfig.types
+    if (savedConfig.scopeRequired !== undefined) profile.scopeRequired = savedConfig.scopeRequired
+    if (savedConfig.language !== undefined) profile.language = savedConfig.language
+    if (savedConfig.maxLength !== undefined) profile.maxLength = savedConfig.maxLength
+    if (savedConfig.totalMaxLength !== undefined) profile.totalMaxLength = savedConfig.totalMaxLength
+    if (savedConfig.vague !== undefined) profile.vague = savedConfig.vague
+  }
+  const override = await readTextIfExists(join(repoRoot, '.dsh-git-dock.json'), 16 * 1024)
+  if (override !== null) {
+    try {
+      const parsed = JSON.parse(override)
+      const commit = parsed.commit !== undefined && parsed.commit !== null ? parsed.commit : {}
+      if (Array.isArray(commit.types) && commit.types.length > 0) profile.allowedTypes = commit.types.map(String)
+      if (Array.isArray(commit.scopes) && commit.scopes.length > 0) profile.allowedScopes = commit.scopes.map(String)
+      if (commit.language === 'zh' || commit.language === 'en') profile.language = commit.language
+      if (typeof commit.maxLength === 'number' && commit.maxLength >= 20 && commit.maxLength <= 120) profile.maxLength = commit.maxLength
+      if (typeof commit.totalMaxLength === 'number' && commit.totalMaxLength >= 100 && commit.totalMaxLength <= 5_000) profile.totalMaxLength = commit.totalMaxLength
+      if (commit.scopeRequired === true || commit.scopeRequired === false) profile.scopeRequired = commit.scopeRequired
+      profile.sources.push('.dsh-git-dock.json')
+    } catch {
+      // An unreadable override is ignored.
+    }
+  }
+  return profile
+}
+
+/** Render a convention profile as prompt rules. */
+function conventionRules(profile) {
+  const languageLabel = profile.language === 'zh' ? 'Chinese' : 'English'
+  const lines = ['Repository commit-message conventions (they OVERRIDE your own habits — follow them exactly):']
+  lines.push('- Format: a single line "type(scope): description"')
+  lines.push(`- Allowed types: ${profile.allowedTypes.slice(0, 12).join(', ')}`)
+  if (profile.scopeRequired) {
+    lines.push('- Scope: REQUIRED. English lowercase or kebab-case module name, e.g. "auth", "user-profile"')
+  } else {
+    lines.push('- Scope: optional; when present use an English lowercase or kebab-case module name')
+  }
+  if (profile.allowedScopes.length > 0) {
+    lines.push(`- Allowed scopes: ${profile.allowedScopes.slice(0, 12).join(', ')}`)
+  } else {
+    const scopes = profile.scopes.map((scope) => scope.name).filter((name) => name !== '')
+    if (scopes.length > 0) lines.push(`- Scopes seen in this repository: ${scopes.slice(0, 10).join(', ')}`)
+    lines.push('- Derive the scope from the module the staged diff actually changes')
+  }
+  lines.push(`- Description: ${languageLabel}, concise, and ONLY about the staged changes shown below`)
+  lines.push(`- Never use vague descriptions such as: ${profile.vague.join(', ')}`)
+  if (profile.maxLength !== null) lines.push(`- Subject line: at most ${profile.maxLength} characters in total`)
+  lines.push(`- Total message: at most ${profile.totalMaxLength} characters including newlines`)
+  lines.push('- If the change needs detail, put the subject alone on the first line, add ONE blank line, then bullet lines that start with "- " (one short bullet per change), staying under the total limit.')
+  lines.push(`- Trailing period: ${profile.trailingPeriod ? 'allowed' : 'never add one on the subject line'}`)
+  if (profile.samples.length > 0) {
+    lines.push('- Examples from this repository:', ...profile.samples.slice(0, 4).map((sample) => `  ${sample}`))
+  }
+  if (profile.template !== null) lines.push(`- The repository's commit template:\n${profile.template}`)
+  return lines.join('\n')
+}
+
+/** Check one draft against the detected profile. */
+function validateCommitMessage(message, profile) {
+  const problems = []
+  const lines = message.split('\n')
+  const subject = lines[0] ?? ''
+  const conventionalRe = /^([A-Za-z][A-Za-z0-9-]*)(\(([^)]{1,40})\))?!?: (.+)$/
+  const match = conventionalRe.exec(subject)
+  if (match === null) {
+    problems.push('the first line must be "type(scope): 中文描述"')
+  } else {
+    const type = match[1]
+    const scope = match[3]
+    const description = match[4]
+    if (/^[A-Z]/.test(type)) problems.push('write the type in lowercase')
+    if (!profile.allowedTypes.includes(type)) {
+      problems.push(`type "${type}" is not allowed (allowed: ${profile.allowedTypes.slice(0, 12).join(', ')})`)
+    }
+    if (profile.scopeRequired && (scope === undefined || scope === '')) {
+      problems.push('the scope is required, e.g. "feat(auth): 新增登录"')
+    }
+    if (scope !== undefined && !/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(scope)) {
+      problems.push(`scope "${scope}" must be lowercase English or kebab-case`)
+    }
+    if (profile.allowedScopes.length > 0 && scope !== undefined && !profile.allowedScopes.includes(scope)) {
+      problems.push(`scope "${scope}" is not allowed (allowed: ${profile.allowedScopes.slice(0, 10).join(', ')})`)
+    }
+    if (description.trim() === '') problems.push('the description is empty')
+    if (profile.language === 'zh' && !/[\u4e00-\u9fff]/.test(description)) {
+      problems.push('the description must be written in Chinese')
+    }
+    const normalized = description.trim().toLowerCase().replace(/[.。,，!！?？\s]+$/g, '')
+    if (profile.vague.some((term) => normalized === term || normalized.startsWith(`${term} `))) {
+      problems.push(`the description "${description}" is too vague; state what changed`)
+    }
+  }
+  if (lines.length > 1) {
+    if (lines[1] !== '') problems.push('separate the subject from the body with exactly one blank line')
+    const bullets = lines.slice(2).filter((line) => line.trim() !== '')
+    if (bullets.length === 0) problems.push('the body has no bullet points; remove the blank line or add "- " bullets')
+    for (const bullet of bullets) {
+      if (!bullet.startsWith('- ')) {
+        problems.push('every body line must be a bullet starting with "- "')
+        break
+      }
+      if (bullet.slice(2).trim() === '') {
+        problems.push('a bullet is empty')
+        break
+      }
+      if (profile.language === 'zh' && !/[\u4e00-\u9fff]/.test(bullet)) {
+        problems.push('body bullets must be written in Chinese')
+        break
+      }
+    }
+  }
+  if (profile.maxLength !== null && subject.length > profile.maxLength) {
+    problems.push(`keep the subject line to at most ${profile.maxLength} characters`)
+  }
+  if (profile.totalMaxLength !== null && message.length > profile.totalMaxLength) {
+    problems.push(`keep the whole message to at most ${profile.totalMaxLength} characters`)
+  }
+  if (!profile.trailingPeriod && /[.。]$/.test(subject)) problems.push('do not end the subject with a period')
+  return { ok: problems.length === 0, problems }
+}
+
+/** One streamed model call producing the cleaned message. */
+async function streamCommitMessage(llm, route, system, prompt, signal, sessionId) {
+  let output = ''
+  const stream = llm.stream({
+    provider: route.provider,
+    model: route.model,
+    system,
+    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+    maxTokens: 300,
+    temperature: 0.2,
+    signal,
+    sessionId,
+  })
+  for await (const chunk of stream) {
+    if (chunk.type === 'text-delta') output += chunk.text
+    else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
+      throw new ApiError('llm-failed', chunk.reason.failure?.message ?? 'model request failed', 502)
+    }
+  }
+  const raw = output
+    .replace(/^```[a-z]*\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .replace(/\r\n?/g, '\n')
+  const cleanedLines = raw.split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim())
+  const compact = []
+  for (const line of cleanedLines) {
+    if (line === '' && (compact.length === 0 || compact[compact.length - 1] === '')) continue
+    compact.push(line)
+  }
+  while (compact.length > 0 && compact[compact.length - 1] === '') compact.pop()
+  let message = compact.join('\n').trim()
+  if (!message.includes('\n')) message = message.replace(/^["'`]|["'`]$/g, '')
+  return message
+}
+
+/** Draft a commit message with the session's model, following repo conventions. */
+async function suggestCommitMessage(ctx, body, signal) {
+  const llm = ctx.get('llm')
+  if (llm === undefined || llm === null || typeof llm.stream !== 'function') {
+    throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
+  }
+  const { session } = resolveSessionCwd(ctx, body.sessionId)
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  const staged = await runGit(state.repoRoot, ['diff', '--cached', '--no-color', '--no-ext-diff'], { signal, maxBytes: DIFF_OUTPUT_LIMIT })
+  const raw = staged.trim() === ''
+    ? await runGit(state.repoRoot, ['diff', '--no-color', '--no-ext-diff'], { signal, maxBytes: DIFF_OUTPUT_LIMIT })
+    : staged
+  if (raw.trim() === '') throw new ApiError('nothing-staged', 'there is no diff to summarize', 409)
+  const diff = raw.length > 16_000 ? `${raw.slice(0, 16_000)}\n… (truncated)` : raw
+  const route = commitModelRoute(ctx, session)
+  if (route === null) throw new ApiError('llm-unavailable', 'no model is selected for this session', 503)
+
+  const conventions = await detectCommitConventions(state.repoRoot, signal)
+  const language = conventions.language ?? (typeof body.language === 'string' && body.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
+  const system = 'You write Git commit messages for the repository below. Reply with ONE line only, no quotes, '
+    + 'no code fences, no trailing explanation.\n\n' + conventionRules(Object.assign({}, conventions, { language }))
+  const prompt = `Changed files: ${state.changes.changed}.\n\nDiff:\n${diff}`
+  let message = await streamCommitMessage(llm, route, system, prompt, signal, body.sessionId)
+  if (message === '') throw new ApiError('llm-failed', 'the model returned an empty message', 502)
+  let check = validateCommitMessage(message, conventions)
+  if (!check.ok) {
+    const correction = `${system}\n\nThe previous draft "${message}" violated the conventions:\n- ${check.problems.join('\n- ')}\nReturn a corrected single-line message that satisfies every rule.`
+    message = await streamCommitMessage(llm, route, correction, prompt, signal, body.sessionId)
+    check = validateCommitMessage(message, conventions)
+    if (!check.ok) {
+      const fallbackLines = message.split('\n')
+      fallbackLines[0] = fallbackLines[0].replace(/[.。]$/, '').trim()
+      if (conventions.maxLength !== null && fallbackLines[0].length > conventions.maxLength) {
+        fallbackLines[0] = fallbackLines[0].slice(0, conventions.maxLength).trim()
+      }
+      while (fallbackLines.length > 1 && fallbackLines[fallbackLines.length - 1].trim() === '') fallbackLines.pop()
+      message = fallbackLines.join('\n')
+      if (conventions.totalMaxLength !== null && message.length > conventions.totalMaxLength) {
+        const parts = message.split('\n')
+        while (parts.length > 1 && parts.join('\n').length > conventions.totalMaxLength) {
+          parts.pop()
+          while (parts.length > 0 && parts[parts.length - 1].trim() === '') parts.pop()
+        }
+        message = parts.join('\n')
+        if (message.length > conventions.totalMaxLength) message = message.slice(0, conventions.totalMaxLength).trim()
+      }
+    }
+  }
+  if (message === '') throw new ApiError('llm-failed', 'the model returned an empty message', 502)
+  const summary = [
+    'conventional',
+    conventions.allowedTypes.slice(0, 5).join('/'),
+    language,
+    conventions.scopeRequired ? 'scope' : null,
+    conventions.maxLength === null ? null : `≤${conventions.maxLength}`,
+    conventions.totalMaxLength === null ? null : `total ≤${conventions.totalMaxLength}`,
+  ].filter(Boolean).join(' · ')
+  return {
+    message,
+    provider: route.provider,
+    model: route.model,
+    conventions: {
+      style: 'conventional',
+      format: DEFAULT_COMMIT_CONVENTION.format,
+      language,
+      scopeRequired: conventions.scopeRequired,
+      maxLength: conventions.maxLength,
+      totalMaxLength: conventions.totalMaxLength,
+      types: conventions.allowedTypes,
+      scopes: conventions.allowedScopes,
+      vague: conventions.vague,
+      sources: conventions.sources,
+      summary,
+    },
+  }
+}
+
+/** Fetch every remote (pruning deleted refs). */
+async function fetchRemote(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    const result = await runGit(before.repoRoot, ['fetch', '--all', '--prune'], {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: 180_000,
+    })
+    if (result.code !== 0) {
+      throw new ApiError('fetch-failed', firstLine(result.stderr) || 'git fetch failed', 400, { detail: result.stderr.slice(0, 4_000) })
+    }
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Pull the upstream into the current branch, fast-forward only. */
+async function pullRemote(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.detached === true) throw new ApiError('detached', 'cannot pull on a detached HEAD', 409)
+    const result = await runGit(before.repoRoot, ['pull', '--ff-only'], {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: 180_000,
+    })
+    if (result.code !== 0) {
+      const detail = result.stderr
+      const diverged = /diverg|not possible to fast-forward|would be overwritten/i.test(detail)
+      throw new ApiError(diverged ? 'diverged' : 'pull-failed', firstLine(detail) || 'git pull failed', 409, { detail: detail.slice(0, 4_000) })
+    }
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Push the current branch, optionally setting its upstream first. */
+async function pushRemote(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.detached === true || before.branch === null) throw new ApiError('detached', 'cannot push a detached HEAD', 409)
+    let upstream = null
+    try {
+      upstream = (await gitText(before.repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { signal })).trim()
+    } catch {
+      upstream = null
+    }
+    let args
+    if (upstream === null || upstream === '') {
+      if (body.setUpstream !== true) {
+        throw new ApiError('no-upstream', `no upstream is configured for ${before.branch}`, 409, { branch: before.branch })
+      }
+      const remotes = (await gitText(before.repoRoot, ['remote'], { signal })).split('\n').filter((name) => name !== '')
+      if (remotes.length === 0) throw new ApiError('no-remote', 'no git remote is configured', 409)
+      const remote = remotes.includes('origin') ? 'origin' : remotes[0]
+      args = ['push', '-u', remote, before.branch]
+    } else {
+      args = ['push']
+    }
+    const result = await runGit(before.repoRoot, args, {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: 180_000,
+    })
+    if (result.code !== 0) {
+      const detail = result.stderr
+      const rejected = /rejected|non-fast-forward|fetch first|behind/i.test(detail)
+      throw new ApiError(rejected ? 'push-rejected' : 'push-failed', firstLine(detail) || 'git push failed', 409, { detail: detail.slice(0, 4_000) })
+    }
+    return { repo: await readRepoState(ctx, body.sessionId, signal), setUpstream: upstream === null || upstream === '', upstream: upstream ?? null }
+  })
+}
+
+// ── Model-facing tool ─────────────────────────────────────────────────────
+
+const TOOL_NAME = 'git_branch'
+
+/** One tool over the same Host operations the UI calls. */
+function toolDefinition(ctx) {
+  return {
+    name: TOOL_NAME,
+    description:
+      'Inspect and change the Git branch of the session working directory. '
+      + 'status returns branch, HEAD, upstream divergence, in-progress operation and change counts; '
+      + 'list adds local and remote branches; switch checks out an existing local branch; '
+      + 'create makes a branch and checks it out; merge merges source into the current branch '
+      + '(mode no-ff by default, ff-only or squash) and reports conflicts; abort_merge abandons an open '
+      + 'merge; complete_merge commits it once every conflict is resolved; resolve_conflict marks one '
+      + 'conflicted path resolved. A conflicted merge stays open until aborted or completed.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['action'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['status', 'list', 'switch', 'create', 'merge', 'abort_merge', 'complete_merge', 'resolve_conflict'],
+          description: 'operation to perform',
+        },
+        branch: { type: 'string', description: 'existing local branch to switch to' },
+        name: { type: 'string', description: 'new branch name (create)' },
+        from: { type: 'string', description: 'optional start point for create; defaults to HEAD' },
+        source: { type: 'string', description: 'branch or ref to merge into the current branch (merge)' },
+        mode: { type: 'string', enum: ['no-ff', 'ff-only', 'squash'], description: 'merge mode; defaults to no-ff' },
+        path: { type: 'string', description: 'repository-relative conflicted path (resolve_conflict)' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(args, value) {
+        return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+      },
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe(args) {
+      return args !== null && typeof args === 'object' && (args.action === 'status' || args.action === 'list')
+    },
+    async execute(args, exec) {
+      const sessionId = exec.agent === undefined ? undefined : exec.agent.id
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        throw new Error('git_branch requires a session context')
+      }
+      const body = args !== null && typeof args === 'object' ? args : {}
+      const signal = exec.signal
+      switch (body.action) {
+        case 'status':
+          return readRepoState(ctx, sessionId, signal)
+        case 'list': {
+          const state = await readRepoState(ctx, sessionId, signal)
+          return Object.assign({ repo: state }, await readBranches(state.repoRoot, signal))
+        }
+        case 'switch': {
+          const state = await readRepoState(ctx, sessionId, signal)
+          if (typeof body.branch !== 'string' || body.branch === '') throw new Error('branch is required for switch')
+          return API.switch(ctx, { sessionId, branch: body.branch, expectHead: state.head, confirmed: true }, signal)
+        }
+        case 'create': {
+          const state = await readRepoState(ctx, sessionId, signal)
+          if (typeof body.name !== 'string' || body.name === '') throw new Error('name is required for create')
+          return API.create(ctx, {
+            sessionId,
+            name: body.name,
+            from: typeof body.from === 'string' ? body.from : '',
+            expectHead: state.head,
+            confirmed: true,
+          }, signal)
+        }
+        case 'merge': {
+          if (typeof body.source !== 'string' || body.source === '') throw new Error('source is required for merge')
+          const preview = await previewMerge(ctx, { sessionId, source: body.source, mode: body.mode }, signal)
+          return applyMerge(ctx, { sessionId, confirmToken: preview.confirmToken, confirmed: true }, signal)
+        }
+        case 'abort_merge':
+          return abortMerge(ctx, { sessionId }, signal)
+        case 'complete_merge':
+          return completeMerge(ctx, { sessionId }, signal)
+        case 'resolve_conflict':
+          if (typeof body.path !== 'string' || body.path === '') throw new Error('path is required for resolve_conflict')
+          return resolveConflict(ctx, { sessionId, path: body.path }, signal)
+        default:
+          throw new Error(`unknown action: ${String(body.action)}`)
+      }
+    },
+  }
+}
+
+/** Register the tool when this deployment exposes a tool registry. */
+function registerTool(ctx) {
+  try {
+    ctx.inject(['tools'], (toolCtx) => {
+      toolCtx.effect(() => {
+        const tools = toolCtx.get('tools')
+        if (tools === undefined || tools === null || typeof tools.register !== 'function') return undefined
+        return tools.register(toolDefinition(ctx))
+      }, 'dsh-git-dock: git_branch tool')
+    })
+  } catch (error) {
+    console.warn('[dsh-git-dock] tool registration failed', error)
+  }
+}
+
+/** Per-repository write queue: one mutating git command at a time. */
+const writeChains = new Map()
+
+/**
+ * Run `operation` after every earlier write for the same repository settled.
+ *
+ * @template T
+ * @param {string} key - repository root.
+ * @param {() => Promise<T>} operation - work to serialize.
+ * @returns {Promise<T>} the operation's value.
+ */
+function withRepoLock(key, operation) {
+  const previous = writeChains.get(key) ?? Promise.resolve()
+  const run = previous.then(operation, operation)
+  const guard = run.then(() => undefined, () => undefined)
+  writeChains.set(key, guard)
+  void guard.then(() => {
+    if (writeChains.get(key) === guard) writeChains.delete(key)
+  })
+  return run
+}
+
+/** Verify that the client's known HEAD still matches the repository. */
+function assertFreshHead(state, expectHead) {
+  if (typeof expectHead === 'string' && expectHead !== '' && state.head !== expectHead) {
+    throw new ApiError('stale', 'the repository changed since the panel was opened', 409, { state })
+  }
+}
+
+/** Refuse a mutation while the session's turn is open, unless confirmed. */
+function assertNotBusy(state, confirmed) {
+  if (state.running === true && confirmed !== true) {
+    throw new ApiError('running', 'the session is running; the change needs explicit confirmation', 409, { state })
+  }
+  if (state.operation !== 'none') {
+    throw new ApiError('operation-in-progress', `a ${state.operation} is in progress; finish or abort it first`, 409, {
+      operation: state.operation,
+    })
+  }
+}
+
+/** Require an existing local branch. */
+async function assertLocalBranch(repoRoot, branch, signal) {
+  try {
+    assertSafeRef(branch)
+  } catch {
+    throw new ApiError('unknown-branch', `local branch not found: ${branch}`, 404)
+  }
+  try {
+    await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { signal })
+  } catch {
+    throw new ApiError('unknown-branch', `local branch not found: ${branch}`, 404)
+  }
+}
+
+/** Validate a name as a well-formed branch. */
+async function assertBranchName(repoRoot, branch, signal) {
+  try {
+    assertSafeRef(branch)
+  } catch {
+    throw new ApiError('invalid-name', `invalid branch name: ${branch}`, 400)
+  }
+  try {
+    await runGit(repoRoot, ['check-ref-format', '--branch', branch], { signal })
+  } catch {
+    throw new ApiError('invalid-name', `invalid branch name: ${branch}`, 400)
+  }
+}
+
+/** Resolve the repository root for a session without reading the whole state. */
+async function resolveRepoRoot(ctx, sessionId, signal) {
+  const { cwd } = resolveSessionCwd(ctx, sessionId)
+  try {
+    return await gitText(cwd, ['rev-parse', '--show-toplevel'], { signal })
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'not-repo') {
+      throw new ApiError('not-repo', 'session directory is not a git repository', 409, { cwd })
+    }
+    throw error
+  }
+}
+
+/** API method table. */
+const API = {
+  /** Current repository state for one session. */
+  async repo(ctx, body, signal) {
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  },
+
+  /** Local branches, remote branches and tags with row metadata. */
+  async branches(ctx, body, signal) {
+    const state = await readRepoState(ctx, body.sessionId, signal)
+    return Object.assign({ repo: state }, await readRefs(state.repoRoot, signal))
+  },
+
+  /** Change list: the working tree, or this branch against a base. */
+  async changes(ctx, body, signal) {
+    return readChanges(ctx, body, signal)
+  },
+
+  /** One file's comparison. */
+  async diff(ctx, body, signal) {
+    return readDiff(ctx, body, signal)
+  },
+
+  /** Preflight a merge without touching the working tree. */
+  async 'merge.preview'(ctx, body, signal) {
+    return previewMerge(ctx, body, signal)
+  },
+
+  /** Perform the merge the preview confirmed. */
+  async 'merge.apply'(ctx, body, signal) {
+    return applyMerge(ctx, body, signal)
+  },
+
+  /** Abort an in-progress merge. */
+  async 'merge.abort'(ctx, body, signal) {
+    return abortMerge(ctx, body, signal)
+  },
+
+  /** Commit an in-progress merge whose conflicts are all resolved. */
+  async 'merge.complete'(ctx, body, signal) {
+    return completeMerge(ctx, body, signal)
+  },
+
+  /** Mark one conflicted path resolved. */
+  async 'merge.resolve'(ctx, body, signal) {
+    return resolveConflict(ctx, body, signal)
+  },
+
+  /** Check out a local branch, remote branch, tag, or commit. */
+  async checkout(ctx, body, signal) {
+    return checkoutRef(ctx, body, signal)
+  },
+
+  /** Stage paths (or everything). */
+  async stage(ctx, body, signal) {
+    return stagePaths(ctx, body, signal)
+  },
+
+  /** Unstage paths (or everything). */
+  async unstage(ctx, body, signal) {
+    return unstagePaths(ctx, body, signal)
+  },
+
+  /** Discard paths through a recoverable stash plus a backup ref. */
+  async discard(ctx, body, signal) {
+    return discardPaths(ctx, body, signal)
+  },
+
+  /** Commit staged changes, optionally amending the tip. */
+  async commit(ctx, body, signal) {
+    return commitChanges(ctx, body, signal)
+  },
+
+  /** Draft a commit message with the session's current model. */
+  async commitMessage(ctx, body, signal) {
+    return suggestCommitMessage(ctx, body, signal)
+  },
+
+  /** The effective commit convention plus the saved override. */
+  async convention(ctx, body, signal) {
+    const state = await readRepoState(ctx, body.sessionId, signal)
+    const profile = await detectCommitConventions(state.repoRoot, signal)
+    const defaults = {
+      allowedTypes: DEFAULT_COMMIT_CONVENTION.types,
+      allowedScopes: [],
+      scopes: [],
+      scopeRequired: DEFAULT_COMMIT_CONVENTION.scopeRequired,
+      language: DEFAULT_COMMIT_CONVENTION.language,
+      maxLength: DEFAULT_COMMIT_CONVENTION.maxLength,
+      totalMaxLength: DEFAULT_COMMIT_CONVENTION.totalMaxLength,
+      vague: DEFAULT_COMMIT_CONVENTION.vague,
+      sources: ['default'],
+    }
+    return {
+      effective: conventionView(profile),
+      saved: await readSavedCommitConfig(),
+      defaults: conventionView(defaults),
+    }
+  },
+
+  /** Save or reset the global commit convention. */
+  async 'convention.save'(ctx, body, signal) {
+    if (body.reset === true) {
+      await clearSavedCommitConfig()
+    } else {
+      const raw = body.commit !== undefined && body.commit !== null ? body.commit : body
+      const config = sanitizeSavedCommitConfig(raw)
+      if (config === null) throw new ApiError('bad-request', 'invalid commit convention')
+      await writeSavedCommitConfig(config)
+    }
+    const state = await readRepoState(ctx, body.sessionId, signal)
+    const profile = await detectCommitConventions(state.repoRoot, signal)
+    return {
+      effective: conventionView(profile),
+      saved: await readSavedCommitConfig(),
+    }
+  },
+
+  /** Fetch all remotes. */
+  async fetch(ctx, body, signal) {
+    return fetchRemote(ctx, body, signal)
+  },
+
+  /** Pull the upstream, fast-forward only. */
+  async pull(ctx, body, signal) {
+    return pullRemote(ctx, body, signal)
+  },
+
+  /** Push the current branch. */
+  async push(ctx, body, signal) {
+    return pushRemote(ctx, body, signal)
+  },
+
+  /** Switch the working tree to an existing local branch. */
+  async switch(ctx, body, signal) {
+    const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+    return withRepoLock(repoRoot, async () => {
+      const before = await readRepoState(ctx, body.sessionId, signal)
+      assertFreshHead(before, body.expectHead)
+      assertNotBusy(before, body.confirmed)
+      await assertLocalBranch(before.repoRoot, body.branch, signal)
+      let backup = null
+      if (before.branch !== body.branch || before.detached === true) {
+        backup = await backupHead(before.repoRoot, `pre-switch-${body.branch}`, signal)
+        await runGit(before.repoRoot, ['switch', '--no-guess', '--end-of-options', body.branch], {
+          signal,
+          timeoutMs: WRITE_TIMEOUT_MS,
+        })
+      }
+      const after = await readRepoState(ctx, body.sessionId, signal)
+      return { repo: after, previousBranch: before.detached === true ? null : before.branch, backup }
+    })
+  },
+
+  /** Create a branch at a start point and switch to it. */
+  async create(ctx, body, signal) {
+    const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+    return withRepoLock(repoRoot, async () => {
+      const before = await readRepoState(ctx, body.sessionId, signal)
+      assertFreshHead(before, body.expectHead)
+      assertNotBusy(before, body.confirmed)
+      await assertBranchName(before.repoRoot, body.name, signal)
+      const from = typeof body.from === 'string' && body.from !== '' ? body.from : null
+      if (from !== null) {
+        assertSafeRef(from)
+        try {
+          await runGit(before.repoRoot, ['rev-parse', '--verify', '--quiet', `${from}^{commit}`], { signal })
+        } catch {
+          throw new ApiError('unknown-ref', `start point not found: ${from}`, 404)
+        }
+      }
+      const exists = await runGit(before.repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${body.name}`], { signal })
+        .then(() => true, () => false)
+      if (exists) throw new ApiError('branch-exists', `branch already exists: ${body.name}`, 409)
+      const args = ['switch', '-c', body.name]
+      if (from !== null) args.push(from)
+      await runGit(before.repoRoot, args, { signal, timeoutMs: WRITE_TIMEOUT_MS })
+      const after = await readRepoState(ctx, body.sessionId, signal)
+      return { repo: after, branches: await readBranches(after.repoRoot, signal) }
+    })
+  },
+}
+
+/**
+ * Fence one incoming request through the shared browser-trust check.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {import('node:http').IncomingMessage} req - incoming request.
+ * @returns {boolean} whether the request may proceed.
+ */
+function fence(ctx, req) {
+  const connection = ctx.get('connection')
+  if (connection === undefined || connection === null) return false
+  try {
+    if (typeof connection.requestRejection === 'function') {
+      return connection.requestRejection(req) === undefined
+    }
+    if (typeof connection.admit === 'function') {
+      const verdict = connection.admit(req)
+      return !(verdict !== null && typeof verdict === 'object' && 'rejection' in verdict)
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+/**
+ * Route handler for the whole API prefix.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {import('node:http').IncomingMessage} req - incoming request.
+ * @param {import('node:http').ServerResponse} res - response.
+ */
+async function handleApi(ctx, req, res) {
+  if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
+    sendError(res, new ApiError('method-error', 'method not allowed', 405))
+    return
+  }
+  if (!fence(ctx, req)) {
+    sendError(res, new ApiError('forbidden', 'forbidden', 403))
+    return
+  }
+  const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname
+  const method = pathname.startsWith(`${ROUTE_PREFIX}/`) ? pathname.slice(ROUTE_PREFIX.length + 1) : ''
+  if (method === '' || method.includes('/')) {
+    sendError(res, new ApiError('not-found', 'unknown api method', 404))
+    return
+  }
+  const handler = Object.hasOwn(API, method) ? API[method] : undefined
+  if (typeof handler !== 'function') {
+    sendError(res, new ApiError('not-found', `unknown api method: ${method}`, 404))
+    return
+  }
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  res.once('close', abort)
+  try {
+    const body = await readJsonBody(req)
+    const value = await handler(ctx, body, controller.signal)
+    if (!controller.signal.aborted) sendJson(res, 200, { ok: true, value })
+  } catch (error) {
+    if (!controller.signal.aborted) sendError(res, error)
+  } finally {
+    res.off('close', abort)
+  }
+}
+
+/**
+ * Plugin entry: register the fenced API route when a web carrier exists.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ */
+export function apply(ctx) {
+  try {
+    ctx.inject(['webServer'], (webCtx) => {
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'prefix',
+        path: ROUTE_PREFIX,
+        handler: (req, res) => {
+          void handleApi(ctx, req, res)
+        },
+      }), 'dsh-git-dock: api routes')
+    })
+  } catch {
+    // Profiles without a web carrier keep the plugin loaded and idle.
+  }
+  registerTool(ctx)
+}

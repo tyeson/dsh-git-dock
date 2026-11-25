@@ -1,0 +1,64 @@
+{
+  "name": "dsh-git-dock",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Git branch dock for DeepSeek Harness: switch, review, commit, merge and sync from the composer",
+  "license": "MIT",
+  "author": "tyeson",
+  "homepage": "https://github.com/tyeson/dsh-git-dock#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tyeson/dsh-git-dock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tyeson/dsh-git-dock/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "git",
+    "branch",
+    "commit",
+    "diff",
+    "merge"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "test": "node test/smoke.mjs"
+  },
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.3 <0.3.0",
+    "node": ">=20"
+  }
+}
