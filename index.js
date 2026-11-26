@@ -2040,6 +2040,9 @@ async function pullRemote(ctx, body, signal) {
   return withRepoLock(repoRoot, async () => {
     const before = await readRepoState(ctx, body.sessionId, signal)
     if (before.detached === true) throw new ApiError('detached', 'cannot pull on a detached HEAD', 409)
+    if (before.upstream === null || before.upstream === undefined || before.upstream === '') {
+      throw new ApiError('no-upstream', `no upstream is configured for ${before.branch}; push and track it first`, 409, { branch: before.branch })
+    }
     const result = await runGit(before.repoRoot, ['pull', '--ff-only'], {
       signal,
       rawResult: true,
@@ -2172,6 +2175,10 @@ async function syncPull(ctx, body, signal) {
       push: { status: 'skipped' },
     }
     if (before.detached === true) throw new ApiError('detached', 'cannot sync a detached HEAD', 409)
+    if (before.upstream === null || before.upstream === undefined || before.upstream === '') {
+      entry.pull = { status: 'no-upstream', reason: 'no-upstream' }
+      return finishSyncPhase(before.repoRoot, entry)
+    }
     if (before.conflictPaths.length > 0) {
       entry.pull = { status: 'blocked', reason: 'unresolved-conflicts', conflicts: before.conflictTypes }
       return finishSyncPhase(before.repoRoot, entry)

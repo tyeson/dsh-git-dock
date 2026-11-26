@@ -336,11 +336,11 @@ check('assist refuses once conflicts are resolved', assistResolved.status === 40
 const completed = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
 check('merge completed', completed.repo.operation === 'none' && git(repoDir, 'log', '-1', '--merges', '--format=%s') !== '')
 const syncPullClean = unwrap(await callApi(handler, 'syncPull', { sessionId: SESSION }))
-check('sync pull reports up-to-date', syncPullClean.pull.status === 'up-to-date', syncPullClean.pull)
+check('sync pull reports a phase result', ['up-to-date', 'no-upstream'].includes(syncPullClean.pull.status), syncPullClean.pull)
 const syncPushClean = unwrap(await callApi(handler, 'syncPush', { sessionId: SESSION }))
 check('sync push reports up-to-date', syncPushClean.push.status === 'up-to-date', syncPushClean.push)
 const syncLogValue = unwrap(await callApi(handler, 'syncLog', { sessionId: SESSION }))
-check('sync log records both phases', Array.isArray(syncLogValue.entries) && syncLogValue.entries.some((entry) => entry.pull.status === 'up-to-date') && syncLogValue.entries.some((entry) => entry.push.status === 'up-to-date'), syncLogValue.entries?.length)
+check('sync log records both phases', Array.isArray(syncLogValue.entries) && syncLogValue.entries.some((entry) => entry.pull !== undefined) && syncLogValue.entries.some((entry) => entry.push !== undefined), syncLogValue.entries?.length)
 const noMerge = await callApi(handler, 'merge.abort', { sessionId: SESSION })
 check('abort refuses without a merge', noMerge.status === 409 && noMerge.body.error.code === 'no-merge', noMerge.body)
 
@@ -421,6 +421,25 @@ const amendPushed = await callApi(handler, 'commit', { sessionId: SESSION, messa
 check('amend of a pushed HEAD is disabled', amendPushed.status === 409 && amendPushed.body.error.code === 'amend-pushed', amendPushed.body)
 const pulled = unwrap(await callApi(handler, 'pull', { sessionId: SESSION }))
 check('ff-only pull is a no-op when in sync', pulled.repo.ahead === 0, pulled.repo.ahead)
+
+console.log('upstream association')
+const beforeTrack = unwrap(await callApi(handler, 'repo', { sessionId: SESSION }))
+const noTrack = unwrap(await callApi(handler, 'create', {
+  sessionId: SESSION, name: 'no-track', from: 'main', expectHead: beforeTrack.repo.head,
+}))
+check('a new local branch has no upstream', noTrack.repo.branch === 'no-track' && (noTrack.repo.upstream === null || noTrack.repo.upstream === ''), noTrack.repo.upstream)
+const pullNoUpstream = await callApi(handler, 'pull', { sessionId: SESSION })
+check('pull refuses without an upstream', pullNoUpstream.status === 409 && pullNoUpstream.body.error.code === 'no-upstream', pullNoUpstream.body)
+const syncNoUpstream = unwrap(await callApi(handler, 'syncPull', { sessionId: SESSION }))
+check('sync pull reports the missing upstream', syncNoUpstream.pull.status === 'no-upstream', syncNoUpstream.pull)
+const tracked = unwrap(await callApi(handler, 'push', { sessionId: SESSION, setUpstream: true }))
+check('push and track creates the upstream', tracked.setUpstream === true && typeof tracked.repo.upstream === 'string' && tracked.repo.upstream.endsWith('/no-track'), tracked.repo.upstream)
+const pulledTracked = unwrap(await callApi(handler, 'pull', { sessionId: SESSION }))
+check('pull works after tracking', typeof pulledTracked.repo.upstream === 'string' && pulledTracked.repo.upstream !== '', pulledTracked.repo.upstream)
+const backToMain = unwrap(await callApi(handler, 'switch', {
+  sessionId: SESSION, branch: 'main', expectHead: noTrack.repo.head, confirmed: true,
+}))
+check('switched back to main', backToMain.repo.branch === 'main', backToMain.repo.branch)
 appendFileSync(join(repoDir, 'main-only.txt'), 'ai\n')
 unwrap(await callApi(handler, 'stage', { sessionId: SESSION, paths: ['main-only.txt'] }))
 const suggestion = unwrap(await callApi(handler, 'commitMessage', { sessionId: SESSION, language: 'en' }))

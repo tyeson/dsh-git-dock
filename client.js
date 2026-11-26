@@ -202,6 +202,9 @@ window.__ModuleLoader__.load({
         'sync.commitPush': '提交并推送',
         'sync.noUpstream': '未设置上游',
         'sync.aheadBehind': '↑{ahead} ↓{behind}',
+        'sync.needUpstream': '当前分支未关联远程分支：请先「推送并关联」，或手动设置上游后再使用获取/拉取/同步',
+        'sync.pushAndTrack': '推送并关联',
+        'sync.pushAndTrackHint': '推送本地分支到远程并建立上游关联（远端不存在该分支时会自动创建）',
         'sync.busy': '处理中…',
         'sync.fetched': '已获取远端',
         'sync.pushed': '已推送',
@@ -469,6 +472,9 @@ window.__ModuleLoader__.load({
         'sync.commitPush': 'Commit and push',
         'sync.noUpstream': 'No upstream',
         'sync.aheadBehind': '↑{ahead} ↓{behind}',
+        'sync.needUpstream': 'This branch has no upstream association: use "Push and track" first, or set an upstream manually before fetching, pulling or syncing',
+        'sync.pushAndTrack': 'Push and track',
+        'sync.pushAndTrackHint': 'Push the local branch and set its upstream (the remote branch is created when missing)',
         'sync.busy': 'Working…',
         'sync.fetched': 'Fetched remotes',
         'sync.pushed': 'Pushed',
@@ -1496,7 +1502,8 @@ window.__ModuleLoader__.load({
         '.gdt-btn:active{background:var(--dsw-alias-interactive-bg-hover);transform:translateY(1px)}',
         '.gdt-btn[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
         '.gdt-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
-        '.gdt-btn:disabled{opacity:.45;cursor:default;pointer-events:none}',
+        '.gdt-btn:disabled{opacity:.45;cursor:not-allowed}',
+        '.gdt-btn:disabled:hover{background:transparent;color:var(--dsw-alias-label-secondary)}',
         '.gdt-btn svg{flex:none}',
         '.gdt-spinner{display:inline-block;width:11px;height:11px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gdt-spin .7s linear infinite;flex:none}',
         '@keyframes gdt-spin{to{transform:rotate(360deg)}}',
@@ -3008,6 +3015,7 @@ window.__ModuleLoader__.load({
               || before.operation !== after.operation
               || (before.changes === undefined ? 0 : before.changes.changed) !== (after.changes === undefined ? 0 : after.changes.changed)
               || (before.conflictPaths === undefined ? 0 : before.conflictPaths.length) !== (after.conflictPaths === undefined ? 0 : after.conflictPaths.length)
+              || (before.upstream ?? null) !== (after.upstream ?? null)
             if (changed) setReloadTick((tickValue) => tickValue + 1)
           } catch {
             // A transient poll failure is ignored; the next tick retries.
@@ -3472,6 +3480,8 @@ window.__ModuleLoader__.load({
 
       const repoInfo = data === null ? null : data.repo
       const conflictPaths = repoInfo === null || repoInfo === undefined ? [] : repoInfo.conflictPaths ?? []
+      const hasUpstream = repoInfo !== null && repoInfo !== undefined
+        && typeof repoInfo.upstream === 'string' && repoInfo.upstream !== ''
       const conflictTypes = repoInfo === null || repoInfo === undefined
         ? []
         : repoInfo.conflictTypes !== undefined && repoInfo.conflictTypes.length > 0
@@ -3574,6 +3584,10 @@ window.__ModuleLoader__.load({
               h('span', { className: 'gdt-del' }, `−${deletions}`))),
           commits === '' ? null : h('span', { className: 'gdt-status-group' }, h('span', { className: 'gdt-summary' }, commits)),
           aheadBehind === '' ? null : h('span', { className: 'gdt-status-group', title: t('tab.syncLabel') }, h('span', { className: 'gdt-summary' }, aheadBehind)),
+          repoInfo === null || repoInfo === undefined || hasUpstream
+            ? null
+            : h('span', { className: 'gdt-status-group', title: t('sync.needUpstream') },
+              h('span', { className: 'gdt-summary' }, t('sync.noUpstream'))),
           repoInfo === null || repoInfo === undefined || repoInfo.operation === 'none'
             ? null
             : h('span', { className: 'gdt-status-group' }, h('span', { className: 'gdt-summary' }, opName(repoInfo.operation)))),
@@ -3834,12 +3848,28 @@ window.__ModuleLoader__.load({
         }, mergeInProgress
           ? (assistBusy ? t('merge.assisting') : (hasConflicts ? t('merge.resolveAction') : t('merge.conflictsResolved')))
           : t('merge.button')),
-        h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('fetch') },
-          remoteBusy === 'fetch' ? t('sync.busy') : t('sync.fetch')),
-        h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('push') },
-          remoteBusy === 'push' ? t('sync.busy') : t('sync.push')),
-        h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('sync') },
-          syncPhase !== null ? syncPhaseLabel() : (remoteBusy === 'sync' ? t('sync.busy') : t('sync.sync'))),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          disabled: remoteBusy !== null || !hasUpstream,
+          title: hasUpstream ? t('sync.fetch') : t('sync.needUpstream'),
+          onClick: () => void remoteAction('fetch'),
+        }, remoteBusy === 'fetch' ? t('sync.busy') : t('sync.fetch')),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          disabled: remoteBusy !== null,
+          title: hasUpstream ? t('sync.push') : t('sync.pushAndTrackHint'),
+          onClick: () => void remoteAction('push'),
+        }, remoteBusy === 'push' ? t('sync.busy') : (hasUpstream ? t('sync.push') : t('sync.pushAndTrack'))),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          disabled: remoteBusy !== null || !hasUpstream,
+          title: hasUpstream ? t('sync.sync') : t('sync.needUpstream'),
+          onClick: () => void remoteAction('sync'),
+        },
+        syncPhase !== null ? syncPhaseLabel() : (remoteBusy === 'sync' ? t('sync.busy') : t('sync.sync'))),
         hasConflicts && syncDismissed
           ? h('button', {
             type: 'button',

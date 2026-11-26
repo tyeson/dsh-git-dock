@@ -91,6 +91,13 @@ switching and creating branches.
   spinners for loading, and a ResizeObserver switches the tab to a narrow layout
   (wrapped toolbars, shorter file list) below ~520px. All colours come from theme
   tokens or `color-mix` over them, so dark mode keeps the same contrast.
+- **Upstream association** — Fetch, Pull and Sync stay disabled while the checked-out
+  branch has no upstream, with a hover title explaining how to fix it; Push stays
+  enabled as **Push and track** and runs `git push -u` (creating the remote branch
+  when missing). The repo poll compares `upstream`, so a branch switch or a
+  successful push re-enables the three buttons and clears the tooltip without a
+  manual refresh. Pull and sync-pull refuse an unassociated branch on the Host side
+  too, and sync reports it as a `no-upstream` pull phase.
 - **Guards** — switching and creating are refused while a merge, rebase,
   cherry-pick, revert, or bisect is in progress; while the session's turn is
   open both require an explicit second confirmation; a stale panel (the
