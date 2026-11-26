@@ -14,7 +14,9 @@ Repository: <https://github.com/tyeson/dsh-git-dock>
 > fetch/push/sync; merge with conflict handling (one click asks the live model to
 > resolve and stage the conflicts; commit and push stay manual); and the
 > `git_branch` tool. Commit-message drafting has its own model/effort picker
-> (defaults to the conversation's choice, remembers the last one).
+> (defaults to the conversation's choice, remembers the last one). Double-click a
+> changed file for a full-screen, syntax-highlighted side-by-side preview with
+> keyboard file switching.
 
 ## Install
 

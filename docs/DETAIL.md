@@ -79,6 +79,11 @@ switching and creating branches.
   result is appended to `<DSH_HOME>/dsh-git-dock/sync-log.json`; the tab's
   **Sync details** button reads the newest entries back. Switching continues to
   record `HEAD` under `refs/dsh/backup/…` (20 newest kept per repository).
+- **Preview** — double-clicking a changed file opens a full-screen comparison
+  window (side-by-side by default, unified/wrap toggles) with lightweight
+  dependency-free syntax highlighting for common languages. `Esc` closes it,
+  `↑/↓` or `J/K` switch between the changed files; because the list stays mounted,
+  closing returns to the same scroll position.
 - **Guards** — switching and creating are refused while a merge, rebase,
   cherry-pick, revert, or bisect is in progress; while the session's turn is
   open both require an explicit second confirmation; a stale panel (the

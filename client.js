@@ -274,6 +274,13 @@ window.__ModuleLoader__.load({
         'tab.binary': '二进制文件，无法对比',
         'tab.truncated': '内容过大，仅显示前 5000 行',
         'tab.unified': '统一',
+        'preview.side': '并排',
+        'preview.unified': '统一',
+        'preview.wrap': '换行',
+        'preview.close': '关闭',
+        'preview.hint': 'Esc 关闭 · ↑/↓ 或 J/K 切换文件',
+        'preview.binary': '二进制文件没有文本差异',
+        'preview.dblclick': '双击预览',
         'tab.side': '并排',
         'tab.wrap': '换行',
         'tab.refresh': '刷新',
@@ -527,6 +534,13 @@ window.__ModuleLoader__.load({
         'tab.binary': 'Binary file — no comparison',
         'tab.truncated': 'Too large — showing the first 5000 lines',
         'tab.unified': 'Unified',
+        'preview.side': 'Side by side',
+        'preview.unified': 'Unified',
+        'preview.wrap': 'Wrap',
+        'preview.close': 'Close',
+        'preview.hint': 'Esc closes · ↑/↓ or J/K switches files',
+        'preview.binary': 'Binary file has no textual diff',
+        'preview.dblclick': 'Double-click to preview',
         'tab.side': 'Side by side',
         'tab.wrap': 'Wrap',
         'tab.refresh': 'Refresh',
@@ -1434,6 +1448,22 @@ window.__ModuleLoader__.load({
         '.gdt-sync-banner{border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,8px);padding:8px 10px;display:flex;flex-direction:column;gap:6px}',
         '.gdt-sync-title{font-weight:600;font-size:13px;line-height:18px}',
         '.gdt-badge{appearance:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;border:0;background:var(--dsw-alias-state-warn-primary);color:#fff;font:inherit;font-size:11px;line-height:18px;cursor:pointer}',
+        '.gdt-tok-comment{color:var(--dsw-alias-label-tertiary);font-style:italic}',
+        '.gdt-tok-string{color:var(--dsw-alias-state-success-primary)}',
+        '.gdt-tok-number{color:var(--dsw-alias-state-warn-primary)}',
+        '.gdt-tok-keyword{color:var(--dsw-alias-link)}',
+        '.gdt-tok-tag{color:var(--dsw-alias-state-info-primary,var(--dsw-alias-link))}',
+        '.gdt-tok-attr{color:var(--dsw-alias-label-secondary)}',
+        '.gdt-tok-heading{color:var(--dsw-alias-label-primary);font-weight:600}',
+        '.gdt-tok-link{color:var(--dsw-alias-link);text-decoration:underline}',
+        '.gdt-preview-backdrop{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);pointer-events:auto}',
+        '.gdt-preview-panel{display:flex;flex-direction:column;width:min(1180px,92vw);height:min(82vh,900px);background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);box-shadow:var(--dsw-elevation-prominent,none);overflow:hidden}',
+        '.gdt-preview-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);min-width:0}',
+        '.gdt-preview-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:13px;color:var(--dsw-alias-label-primary)}',
+        '.gdt-preview-count{font-size:12px;color:var(--dsw-alias-label-tertiary);flex:none}',
+        '.gdt-preview-body{flex:1;min-height:0;display:flex;flex-direction:column}',
+        '.gdt-preview-scroll{flex:1;min-height:0}',
+        '.gdt-preview-foot{padding:6px 12px;border-top:1px solid var(--dsw-alias-border-l1);font-size:11px;color:var(--dsw-alias-label-tertiary)}',
         '.gdt-model-name{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.gdt-mp-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary)}',
         '.gdt-mp-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
@@ -2588,6 +2618,113 @@ window.__ModuleLoader__.load({
     }
 
     /** Unified comparison rows. */
+    // ── Lightweight, dependency-free syntax highlighting for diff lines ────
+
+    const CODE_KEYWORDS = {
+      js: ['as', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'get', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let', 'new', 'null', 'of', 'private', 'protected', 'public', 'readonly', 'return', 'satisfies', 'set', 'static', 'super', 'switch', 'this', 'throw', 'true', 'try', 'type', 'typeof', 'undefined', 'var', 'void', 'while', 'yield'],
+      c: ['auto', 'bool', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue', 'default', 'delete', 'do', 'double', 'else', 'enum', 'extends', 'false', 'final', 'finally', 'float', 'for', 'foreach', 'function', 'if', 'implements', 'import', 'int', 'interface', 'long', 'namespace', 'new', 'null', 'package', 'private', 'protected', 'public', 'return', 'short', 'static', 'struct', 'super', 'switch', 'template', 'this', 'throw', 'throws', 'true', 'try', 'typedef', 'typename', 'using', 'virtual', 'void', 'volatile', 'while'],
+      py: ['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'False', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'None', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'True', 'try', 'while', 'with', 'yield'],
+      sh: ['case', 'do', 'done', 'elif', 'else', 'esac', 'fi', 'for', 'function', 'if', 'in', 'local', 'return', 'then', 'until', 'while', 'export', 'echo', 'cd', 'set'],
+      json: ['true', 'false', 'null'],
+    }
+
+    const CODE_EXTENSIONS = {
+      js: ['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'vue', 'svelte'],
+      json: ['json', 'jsonc'],
+      css: ['css', 'scss', 'less', 'styl'],
+      html: ['html', 'htm', 'xml', 'svg', 'wxml', 'wxss'],
+      md: ['md', 'markdown'],
+      sh: ['sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd'],
+      py: ['py'],
+      c: ['java', 'go', 'rs', 'c', 'cc', 'cpp', 'cxx', 'h', 'hpp', 'cs', 'kt', 'kts', 'swift', 'scala', 'php', 'rb', 'sql', 'dart', 'lua'],
+    }
+
+    const codePatterns = new Map()
+    const codeCache = new Map()
+
+    /** Pick a highlighting language from a file path, or null for plain text. */
+    function languageOf(path) {
+      if (typeof path !== 'string') return null
+      const name = path.toLowerCase()
+      const dot = name.lastIndexOf('.')
+      if (dot < 0) return null
+      const ext = name.slice(dot + 1)
+      for (const [language, extensions] of Object.entries(CODE_EXTENSIONS)) {
+        if (extensions.includes(ext)) return language
+      }
+      return null
+    }
+
+    /** Compile (once) the token regexp for one language. */
+    function codePattern(language) {
+      if (codePatterns.has(language)) return codePatterns.get(language)
+      const parts = []
+      if (language === 'html') parts.push('<!--[\\s\\S]*?-->')
+      else if (language === 'md') parts.push('^#{1,6}[^\\n]*')
+      else if (language === 'css') parts.push('\\/\\*[\\s\\S]*?\\*\\/')
+      else if (language === 'py' || language === 'sh') parts.push('#[^\\n]*')
+      else if (language !== 'json') parts.push('\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/')
+      parts.push("'(?:[^'\\\\\\n]|\\\\.)*'")
+      parts.push('"(?:[^"\\\\\\n]|\\\\.)*"')
+      parts.push('`(?:[^`\\\\]|\\\\.)*`')
+      if (language === 'css') parts.push('#[0-9a-fA-F]{3,8}\\b|@[\\w-]+')
+      if (language === 'html') parts.push('</?[a-zA-Z][\\w-]*|[a-zA-Z][\\w-]*(?==)')
+      if (language === 'md') parts.push('!?\\[[^\\]]*\\]\\([^)]*\\)')
+      parts.push('\\b\\d+(?:\\.\\d+)?\\b')
+      const keywords = CODE_KEYWORDS[language]
+      if (keywords !== undefined && keywords.length > 0) {
+        parts.push(`\\b(?:${keywords.join('|')})\\b`)
+      }
+      const pattern = new RegExp(parts.join('|'), 'gm')
+      codePatterns.set(language, pattern)
+      return pattern
+    }
+
+    /** Classify one matched token into a highlight class. */
+    function tokenClass(token, language) {
+      if (token.startsWith('<!--') || token.startsWith('/*') || token.startsWith('//')) return 'comment'
+      if (token.startsWith('#') && language !== 'css' && language !== 'html' && language !== 'md') return 'comment'
+      if (language === 'css' && (token.startsWith('#') || token.startsWith('@'))) return 'tag'
+      if (language === 'html') {
+        if (token.startsWith('<')) return 'tag'
+        if (!/^['"`]/.test(token) && !/^-?\d/.test(token)) return 'attr'
+      }
+      if (language === 'md' && token.startsWith('#')) return 'heading'
+      if (language === 'md' && (token.startsWith('[') || token.startsWith('!['))) return 'link'
+      if (/^['"`]/.test(token)) return 'string'
+      if (/^-?\d/.test(token)) return 'number'
+      const keywords = CODE_KEYWORDS[language]
+      if (keywords !== undefined && keywords.includes(token)) return 'keyword'
+      return null
+    }
+
+    /** Split one diff line's text into highlighted spans (memoized). */
+    function highlightCode(text, language) {
+      if (language === null || language === undefined || text === '') return text
+      const key = `${language}\u0000${text}`
+      const cached = codeCache.get(key)
+      if (cached !== undefined) return cached
+      const pattern = codePattern(language)
+      const nodes = []
+      let last = 0
+      pattern.lastIndex = 0
+      let match = pattern.exec(text)
+      while (match !== null) {
+        if (match.index > last) nodes.push(text.slice(last, match.index))
+        const token = match[0]
+        const cls = tokenClass(token, language)
+        nodes.push(cls === null ? token : h('span', { key: nodes.length, className: `gdt-tok-${cls}` }, token))
+        last = match.index + token.length
+        if (token.length === 0) pattern.lastIndex += 1
+        match = pattern.exec(text)
+      }
+      if (last < text.length) nodes.push(text.slice(last))
+      const result = nodes.length === 0 ? text : nodes
+      if (codeCache.size > 4000) codeCache.clear()
+      codeCache.set(key, result)
+      return result
+    }
+
     function UnifiedDiff(props) {
       const rows = []
       props.hunks.forEach((hunk, hunkIndex) => {
@@ -2602,14 +2739,14 @@ window.__ModuleLoader__.load({
           h('span', { className: 'gdt-no' }, line.oldNo === null ? '' : String(line.oldNo)),
           h('span', { className: 'gdt-no' }, line.newNo === null ? '' : String(line.newNo)),
           h('span', { className: 'gdt-sign' }, line.kind === ' ' ? '' : line.kind),
-          h('span', { className: 'gdt-text' }, line.text)))
+          h('span', { className: 'gdt-text' }, highlightCode(line.text, props.lang ?? null))))
         })
       })
       return h(React.Fragment, null, rows)
     }
 
     /** One side-of-pair cell for the side-by-side viewer. */
-    function sideCell(line, side, wrap) {
+    function sideCell(line, side, wrap, lang) {
       if (line === null) {
         return h('div', { className: 'gdt-side-col gdt-side-line', 'data-kind': ' ' },
           h('span', { className: 'gdt-no' }, ''),
@@ -2621,7 +2758,7 @@ window.__ModuleLoader__.load({
         'data-wrap': wrap ? 'true' : 'false',
       },
       h('span', { className: 'gdt-no' }, String((side === 0 ? line.oldNo : line.newNo) ?? '')),
-      h('span', { className: 'gdt-text' }, line.text))
+      h('span', { className: 'gdt-text' }, highlightCode(line.text, lang ?? null)))
     }
 
     /** Side-by-side comparison rows, deletions paired with additions. */
@@ -2655,8 +2792,8 @@ window.__ModuleLoader__.load({
         }
         pairs.forEach((pair, pairIndex) => {
           rows.push(h('div', { key: `pair-${hunkIndex}-${pairIndex}`, className: 'gdt-side' },
-            sideCell(pair.left, 0, props.wrap),
-            sideCell(pair.right, 1, props.wrap)))
+            sideCell(pair.left, 0, props.wrap, props.lang ?? null),
+            sideCell(pair.right, 1, props.wrap, props.lang ?? null)))
         })
       })
       return h(React.Fragment, null, rows)
@@ -3400,7 +3537,7 @@ window.__ModuleLoader__.load({
         else void stagePaths([file.path], false)
       }
 
-      const fileRow = (file) => {
+      const fileRow = (file, index) => {
         const active = selected !== null && selected.path === file.path
         const counts = file.binary === true
           ? h('span', null, 'bin')
@@ -3414,8 +3551,17 @@ window.__ModuleLoader__.load({
           'data-active': active ? 'true' : 'false',
           role: 'button',
           tabIndex: 0,
-          title: label,
+          title: `${label} · ${t('preview.dblclick')}`,
           onClick: () => pickFile(file),
+          onDoubleClick: () => {
+            openDiffPreview(
+              sessionId,
+              scope,
+              scope === 'branch' ? baseValue : null,
+              files.map((entry) => ({ path: entry.path, status: entry.status, untracked: entry.status === '?' })),
+              index,
+            )
+          },
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault()
@@ -3803,6 +3949,7 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'gdt-btn', onClick: () => void discardPaths() }, t('discard.confirmYes')))),
       ].filter((node) => node !== null)
 
+      const diffLang = selected === null ? null : languageOf(selected.path)
       const diffToolbar = selected === null ? null : h('div', { className: 'gdt-diff-bar' },
         h('span', { className: 'gdt-diff-path', title: selected.path }, selected.path),
         h('button', {
@@ -3838,7 +3985,7 @@ window.__ModuleLoader__.load({
           diffBody = h('div', { className: 'gdt-note' }, t('tab.empty'))
         } else {
           diffBody = h('div', { className: 'gdt-scroll' },
-            view === 'side' ? h(SideDiff, { hunks: diff.hunks, wrap }) : h(UnifiedDiff, { hunks: diff.hunks, wrap }),
+            view === 'side' ? h(SideDiff, { hunks: diff.hunks, wrap, lang: diffLang }) : h(UnifiedDiff, { hunks: diff.hunks, wrap, lang: diffLang }),
             diff.truncated === true ? h('div', { className: 'gdt-note' }, t('tab.truncated')) : null)
         }
       }
@@ -3855,6 +4002,213 @@ window.__ModuleLoader__.load({
         syncDetails,
         banners,
         h('div', { className: 'gdt-split' }, statusNodes, fileList, diffPane))
+    }
+
+    // ── Full-screen diff preview (double-click a changed file) ─────────────
+
+    let diffPreview = {
+      open: false,
+      sessionId: null,
+      scope: 'worktree',
+      base: null,
+      files: [],
+      index: 0,
+      view: 'side',
+      wrap: false,
+      diff: null,
+      status: 'idle',
+      error: null,
+    }
+
+    const diffPreviewListeners = new Set()
+
+    function getDiffPreviewState() {
+      return diffPreview
+    }
+
+    function subscribeDiffPreview(listener) {
+      diffPreviewListeners.add(listener)
+      return () => diffPreviewListeners.delete(listener)
+    }
+
+    function setDiffPreviewState(patch) {
+      diffPreview = Object.assign({}, diffPreview, patch)
+      for (const listener of diffPreviewListeners) {
+        try {
+          listener()
+        } catch {
+          // A broken subscriber must not break the others.
+        }
+      }
+    }
+
+    function useDiffPreviewStore() {
+      if (typeof React.useSyncExternalStore === 'function') {
+        return React.useSyncExternalStore(subscribeDiffPreview, getDiffPreviewState)
+      }
+      const [, force] = React.useState(0)
+      React.useEffect(() => subscribeDiffPreview(() => force((value) => value + 1)), [])
+      return diffPreview
+    }
+
+    /** Open the floating preview on one changed file and its sibling list. */
+    function openDiffPreview(sessionId, scope, base, files, index) {
+      closeMergePicker()
+      closeBasePicker()
+      closeModelPicker()
+      closePanel(false)
+      const list = Array.isArray(files)
+        ? files.filter((file) => file !== null && file !== undefined && typeof file.path === 'string' && file.path !== '')
+        : []
+      if (list.length === 0) return
+      const safeIndex = Math.max(0, Math.min(typeof index === 'number' ? index : 0, list.length - 1))
+      setDiffPreviewState({
+        open: true,
+        sessionId,
+        scope: scope === 'branch' ? 'branch' : 'worktree',
+        base: base ?? null,
+        files: list,
+        index: safeIndex,
+        diff: null,
+        status: 'loading',
+        error: null,
+      })
+    }
+
+    function closeDiffPreview() {
+      setDiffPreviewState({ open: false, sessionId: null, files: [], index: 0, diff: null, status: 'idle', error: null })
+    }
+
+    function stepDiffPreview(delta) {
+      if (diffPreview.open !== true || diffPreview.files.length === 0) return
+      const total = diffPreview.files.length
+      const next = ((diffPreview.index + delta) % total + total) % total
+      setDiffPreviewState({ index: next, diff: null, status: 'loading', error: null })
+    }
+
+    /** Full-screen comparison window with keyboard file switching. */
+    function DiffPreview() {
+      useLang()
+      const snapshot = useDiffPreviewStore()
+      const panelRef = React.useRef(null)
+      React.useEffect(() => {
+        ensureStyle()
+      }, [])
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            closeDiffPreview()
+            return
+          }
+          if (event.key === 'ArrowDown' || event.key === 'j' || event.key === 'J') {
+            event.preventDefault()
+            event.stopPropagation()
+            stepDiffPreview(1)
+            return
+          }
+          if (event.key === 'ArrowUp' || event.key === 'k' || event.key === 'K') {
+            event.preventDefault()
+            event.stopPropagation()
+            stepDiffPreview(-1)
+          }
+        }
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => document.removeEventListener('keydown', onKeyDown, true)
+      }, [snapshot.open])
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        const file = snapshot.files[snapshot.index] ?? null
+        if (file === null) return undefined
+        let cancelled = false
+        setDiffPreviewState({ status: 'loading', error: null, diff: null })
+        void (async () => {
+          try {
+            const value = await callApi('diff', {
+              sessionId: snapshot.sessionId,
+              scope: snapshot.scope,
+              base: snapshot.scope === 'branch' && snapshot.base !== null ? snapshot.base : undefined,
+              path: file.path,
+              untracked: file.untracked === true,
+            })
+            if (!cancelled) setDiffPreviewState({ diff: value, status: 'ready' })
+          } catch (thrown) {
+            if (!cancelled) setDiffPreviewState({ status: 'error', error: { code: thrown.code, message: thrown.message } })
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [snapshot.open, snapshot.index, snapshot.sessionId, snapshot.scope, snapshot.base])
+
+      if (snapshot.open !== true) return null
+      const file = snapshot.files[snapshot.index] ?? null
+      if (file === null) return null
+      const language = languageOf(file.path)
+      const total = snapshot.files.length
+      const body = snapshot.status === 'loading'
+        ? h('div', { className: 'gdt-note' }, t('tab.loading'))
+        : snapshot.status === 'error'
+          ? h('div', { className: 'gdt-error', role: 'alert' }, errorText(snapshot.error))
+          : snapshot.diff === null
+            ? null
+            : snapshot.diff.binary === true
+              ? h('div', { className: 'gdt-note' }, t('preview.binary'))
+              : snapshot.diff.hunks.length === 0
+                ? h('div', { className: 'gdt-note' }, t('tab.empty'))
+                : h('div', { className: 'gdt-scroll gdt-preview-scroll' },
+                  snapshot.view === 'side'
+                    ? h(SideDiff, { hunks: snapshot.diff.hunks, wrap: snapshot.wrap, lang: language })
+                    : h(UnifiedDiff, { hunks: snapshot.diff.hunks, wrap: snapshot.wrap, lang: language }),
+                  snapshot.diff.truncated === true ? h('div', { className: 'gdt-note' }, t('tab.truncated')) : null)
+
+      return h('div', {
+        className: 'gdt-preview-backdrop',
+        onMouseDown: (event) => {
+          if (event.target === event.currentTarget) closeDiffPreview()
+        },
+      },
+      h('div', {
+        ref: panelRef,
+        className: 'gdt-preview-panel',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': file.path,
+        onMouseDown: (event) => event.stopPropagation(),
+      },
+      h('div', { className: 'gdt-preview-head' },
+        h('span', { className: 'gdt-preview-title', title: file.path }, file.path),
+        h('span', { className: 'gdt-preview-count' }, `${snapshot.index + 1} / ${total}`),
+        h('span', { className: 'gdt-spacer' }),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          'data-active': snapshot.view === 'side' ? 'true' : 'false',
+          onClick: () => setDiffPreviewState({ view: 'side' }),
+        }, t('preview.side')),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          'data-active': snapshot.view === 'unified' ? 'true' : 'false',
+          onClick: () => setDiffPreviewState({ view: 'unified' }),
+        }, t('preview.unified')),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          'data-active': snapshot.wrap ? 'true' : 'false',
+          onClick: () => setDiffPreviewState({ wrap: snapshot.wrap !== true }),
+        }, t('preview.wrap')),
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          'aria-label': t('preview.close'),
+          title: t('preview.close'),
+          onClick: closeDiffPreview,
+        }, '×')),
+      h('div', { className: 'gdt-preview-body' }, body),
+      h('div', { className: 'gdt-preview-foot' }, t('preview.hint'))))
     }
 
     // ── Plugin entry ──────────────────────────────────────────────────────
@@ -3917,6 +4271,12 @@ window.__ModuleLoader__.load({
           id: 'git-dock-model',
           order: 103,
         }, ModelPicker))
+
+        slots.inject('shell.overlay', () => slots.register({
+          name: 'shell.overlay',
+          id: 'git-dock-preview',
+          order: 105,
+        }, DiffPreview))
 
         // The review surface is a native right-sidebar tab type. The type and
         // its body are two registrations under the SAME id, and the guide entry
