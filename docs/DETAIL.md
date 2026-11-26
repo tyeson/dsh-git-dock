@@ -66,7 +66,11 @@ switching and creating branches.
   stay manual. Commit-message drafting has its own model and reasoning-effort
   picker in the commit bar: it defaults to the conversation's current choice and
   remembers the last pick in `localStorage`, and the chosen route is sent with the
-  `commitMessage` request.
+  `commitMessage` request. The draft walks the **entire** staged index (falling
+  back to the working tree when nothing is staged) and lists every changed file
+  sorted by path and deduplicated by final state, so re-staging one file cannot
+  hide the rest; the response returns that path-sorted file list and the tab shows
+  it above the commit bar for review before submitting.
 - **Sync** runs as two reported phases (`syncPull` then `syncPush`): fetch, then
   fast-forward or merge the upstream, then push. Merge conflicts end the pull
   phase with the conflicted files typed by their porcelain XY code (content,

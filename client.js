@@ -159,6 +159,12 @@ window.__ModuleLoader__.load({
         'commit.aiBusy': '生成中…',
         'commit.aiHint': '优先使用已暂存的 diff；没有暂存时使用工作区改动，发给当前会话模型',
         'commit.nothingToDraft': '没有可生成提交信息的改动（先修改或暂存文件）',
+        'commit.summaryTitle': '生成依据：{scope} · {n} 个文件（按路径排序）',
+        'commit.summaryStaged': '已暂存变更',
+        'commit.summaryWorktree': '工作区变更（暂存区为空）',
+        'commit.summaryFallback': '暂存区为空，本次汇总基于工作区改动。',
+        'commit.summaryEmpty': '未能读取到文件明细，请刷新后重试。',
+        'commit.summaryHint': '已按路径去重排序；请确认汇总覆盖全部改动后再提交。',
         'commit.modelTitle': '提交信息模型',
         'commit.modelHint': '选择生成提交信息使用的模型与推理等级',
         'commit.modelFollow': '跟随当前会话',
@@ -429,6 +435,12 @@ window.__ModuleLoader__.load({
         'commit.aiBusy': 'Drafting…',
         'commit.aiHint': 'Uses the staged diff, or the working-tree diff when nothing is staged',
         'commit.nothingToDraft': 'There are no changes to draft a message from (edit or stage files first)',
+        'commit.summaryTitle': 'Draft basis: {scope} · {n} file(s) (sorted by path)',
+        'commit.summaryStaged': 'staged changes',
+        'commit.summaryWorktree': 'working-tree changes (index empty)',
+        'commit.summaryFallback': 'The index is empty, so this draft is based on working-tree changes.',
+        'commit.summaryEmpty': 'Could not read the file details; refresh and retry.',
+        'commit.summaryHint': 'Deduplicated and sorted by path; review that the summary covers every change before committing.',
         'commit.modelTitle': 'Commit message model',
         'commit.modelHint': 'Pick the model and reasoning effort used to draft commit messages',
         'commit.modelFollow': 'Follow this conversation',
@@ -1493,7 +1505,8 @@ window.__ModuleLoader__.load({
         '.gdt-mp-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.gdt-mp-caret{font-size:10px;opacity:.6}',
         '.gdt-mp-check{color:var(--dsw-alias-link);margin-left:4px}',
-        '.gdt-mp-list{border-top:1px solid var(--dsw-alias-border-l1);margin:2px 0;padding-top:2px;max-height:260px;overflow:auto}',
+        '.gct-draft-summary{margin:6px 10px 0;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,8px);padding:8px;display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto}',
+        '.gct-draft-files{display:flex;flex-direction:column;gap:2px;min-width:0}',
         '.gdt-mp-list .gdt-mp-row{padding:6px 10px;font-size:12.5px}',
         '.gdt-summary{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}',
         '.gdt-spacer{flex:1}',
@@ -2855,6 +2868,7 @@ window.__ModuleLoader__.load({
       const [amend, setAmend] = React.useState(false)
       const [commitBusy, setCommitBusy] = React.useState(false)
       const [aiBusy, setAiBusy] = React.useState(false)
+      const [draftSummary, setDraftSummary] = React.useState(null)
       const [modelOptions, setModelOptions] = React.useState(null)
       const [modelChoice, setModelChoice] = React.useState(readStoredModelChoice)
       const [activeModelEfforts, setActiveModelEfforts] = React.useState(null)
@@ -3233,6 +3247,7 @@ window.__ModuleLoader__.load({
           const value = await callApi('commit', { sessionId, message, amend: amendFlag })
           setMessage('')
           setAmend(false)
+          setDraftSummary(null)
           setNotice(t(amendFlag ? 'commit.amended' : 'commit.done', { sha: value.commit.sha }))
           void loadChanges()
           notifyRepoChanged(sessionId)
@@ -3302,6 +3317,10 @@ window.__ModuleLoader__.load({
               }),
           })
           setMessage(value.message)
+          setDraftSummary({
+            scope: value.scope === 'worktree' ? 'worktree' : 'staged',
+            files: Array.isArray(value.files) ? value.files : [],
+          })
           setCommitHint(value.conventions === undefined || value.conventions === null ? null : value.conventions.summary ?? null)
           if (value.conventions !== undefined && value.conventions !== null && typeof value.conventions.totalMaxLength === 'number') {
             setCommitLimit(value.conventions.totalMaxLength)
@@ -3751,6 +3770,19 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'gdt-btn', disabled: configBusy, onClick: () => void saveConvention(false) },
             configBusy ? t('sync.busy') : t('commit.save')))) : null
 
+      const draftSummaryPanel = draftSummary === null ? null : h('div', { className: 'gct-draft-summary' },
+        h('div', { className: 'gct-config-title' }, t('commit.summaryTitle', {
+          scope: draftSummary.scope === 'staged' ? t('commit.summaryStaged') : t('commit.summaryWorktree'),
+          n: draftSummary.files.length,
+        })),
+        draftSummary.scope === 'staged' ? null : h('div', { className: 'gdt-summary' }, t('commit.summaryFallback')),
+        draftSummary.files.length === 0
+          ? h('div', { className: 'gdt-summary' }, t('commit.summaryEmpty'))
+          : h('div', { className: 'gct-draft-files' }, draftSummary.files.map((file) => h('div', { key: file.path, className: 'gct-config-row' },
+            h('span', { className: 'gdt-path', title: file.path }, file.path),
+            h('span', { className: 'gdt-summary', title: t('sync.typeLabel') }, `${file.status}${file.additions === null ? '' : ` +${file.additions}`}${file.deletions === null ? '' : ` −${file.deletions}`}`)))),
+        h('div', { className: 'gdt-summary' }, t('commit.summaryHint')))
+
       const commitBar = worktreeScope
         ? (configPanel !== null ? configPanel : h('div', { className: 'gct-commit' },
           h('textarea', {
@@ -3807,7 +3839,8 @@ window.__ModuleLoader__.load({
               disabled: commitBusy || message.trim() === '' || message.length > commitLimit || (stagedCount === 0 && amend !== true),
               onClick: () => void commitNow(amend),
             }, commitBusy ? t('commit.busy') : t('commit.submit'))),
-          commitHint === null ? null : h('div', { className: 'gdt-summary', style: { fontSize: '11px' } }, t('commit.conventionHint', { summary: commitHint }))))
+          commitHint === null ? null : h('div', { className: 'gdt-summary', style: { fontSize: '11px' } }, t('commit.conventionHint', { summary: commitHint })),
+          draftSummaryPanel))
         : null
 
       const syncStateLabel = (phase) => {

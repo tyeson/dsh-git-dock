@@ -1931,6 +1931,72 @@ async function streamCommitMessage(llm, route, system, prompt, signal, sessionId
   return message
 }
 
+/**
+ * List the files of one comparison (staged index or working tree), sorted by
+ * path and deduplicated so a path appears once in its final state.
+ *
+ * @param {string} repoRoot - repository root.
+ * @param {'staged'|'worktree'} mode - comparison to list.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object[]>} `{ path, origPath?, status, additions, deletions }` rows.
+ */
+async function listChangedFiles(repoRoot, mode, signal) {
+  const statusRaw = await runGit(repoRoot, ['status', '--porcelain=v2', '-z', '--untracked-files=normal'], { signal })
+  const rows = parseStatusRows(statusRaw)
+  const allowed = rows.filter((row) => {
+    if (mode === 'staged') return row.untracked !== true && row.x !== undefined && row.x !== '.' && row.x !== '!'
+    if (row.untracked === true) return true
+    return row.y !== undefined && row.y !== '.' && row.y !== '!'
+  })
+  let stats = new Map()
+  try {
+    const args = mode === 'staged'
+      ? ['diff', '--cached', '--numstat', '-z', '--no-color']
+      : ['diff', '--numstat', '-z', '--no-color']
+    const numstat = await runGit(repoRoot, args, { signal })
+    const tokens = numstat.split('\0')
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index]
+      if (token === '') continue
+      const firstTab = token.indexOf('\t')
+      const secondTab = firstTab < 0 ? -1 : token.indexOf('\t', firstTab + 1)
+      if (firstTab < 0 || secondTab < 0) continue
+      const added = token.slice(0, firstTab)
+      const deleted = token.slice(firstTab + 1, secondTab)
+      let path = token.slice(secondTab + 1)
+      if (path === '') {
+        path = tokens[index + 1] ?? ''
+        index += 1
+      }
+      if (path === '') continue
+      stats.set(path, {
+        additions: added === '-' ? null : Number(added),
+        deletions: deleted === '-' ? null : Number(deleted),
+      })
+    }
+  } catch {
+    stats = new Map()
+  }
+  const byPath = new Map()
+  for (const row of allowed) {
+    const status = row.untracked === true ? '?' : mode === 'staged' ? row.x : row.y
+    const stat = stats.get(row.path)
+    byPath.set(row.path, {
+      path: row.path,
+      origPath: row.origPath ?? null,
+      status,
+      additions: stat === undefined ? null : stat.additions,
+      deletions: stat === undefined ? null : stat.deletions,
+    })
+  }
+  // A diff entry that the status rows cannot name still belongs to the summary.
+  for (const [path, stat] of stats) {
+    if (byPath.has(path)) continue
+    byPath.set(path, { path, origPath: null, status: 'M', additions: stat.additions, deletions: stat.deletions })
+  }
+  return [...byPath.values()].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+}
+
 /** Draft a commit message with the session's model, following repo conventions. */
 async function suggestCommitMessage(ctx, body, signal) {
   const llm = ctx.get('llm')
@@ -1940,11 +2006,16 @@ async function suggestCommitMessage(ctx, body, signal) {
   const { session } = resolveSessionCwd(ctx, body.sessionId)
   const state = await readRepoState(ctx, body.sessionId, signal)
   const staged = await runGit(state.repoRoot, ['diff', '--cached', '--no-color', '--no-ext-diff'], { signal, maxBytes: DIFF_OUTPUT_LIMIT })
-  const raw = staged.trim() === ''
+  const useWorktree = staged.trim() === ''
+  const raw = useWorktree
     ? await runGit(state.repoRoot, ['diff', '--no-color', '--no-ext-diff'], { signal, maxBytes: DIFF_OUTPUT_LIMIT })
     : staged
-  if (raw.trim() === '') throw new ApiError('nothing-staged', 'there is no diff to summarize', 409)
-  const diff = raw.length > 16_000 ? `${raw.slice(0, 16_000)}\n… (truncated)` : raw
+  if (raw.trim() === '') {
+    throw new ApiError('nothing-staged', 'nothing to summarize: stage files or modify the worktree first', 409)
+  }
+  const scope = useWorktree ? 'worktree' : 'staged'
+  const files = await listChangedFiles(state.repoRoot, scope, signal)
+  const diff = raw.length > 24_000 ? `${raw.slice(0, 24_000)}\n… (diff truncated; the file list above is complete)` : raw
   const requested = body !== null && typeof body === 'object' ? body : {}
   const explicitRoute = typeof requested.provider === 'string' && requested.provider !== ''
     && typeof requested.model === 'string' && requested.model !== ''
@@ -1960,7 +2031,22 @@ async function suggestCommitMessage(ctx, body, signal) {
   const language = conventions.language ?? (typeof body.language === 'string' && body.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
   const system = 'You write Git commit messages for the repository below. Reply with ONE line only, no quotes, '
     + 'no code fences, no trailing explanation.\n\n' + conventionRules(Object.assign({}, conventions, { language }))
-  const prompt = `Changed files: ${state.changes.changed}.\n\nDiff:\n${diff}`
+  const fileLines = files
+    .map((file) => {
+      const name = file.origPath === null ? file.path : `${file.origPath} → ${file.path}`
+      const counts = `${file.additions === null ? '' : ` +${file.additions}`}${file.deletions === null ? '' : ` -${file.deletions}`}`.trim()
+      return `- ${name} (${file.status}${counts === '' ? '' : ` ${counts}`})`
+    })
+    .join('\n')
+  const prompt = [
+    `Commit scope: ${scope === 'staged' ? 'the staged index (all staged changes)' : 'the working tree (nothing is staged)'}.`,
+    `Changed files (${files.length}), sorted by path and deduplicated by final state:`,
+    fileLines,
+    '',
+    'Write a message that reflects every staged change above, not just the last one.',
+    '',
+    `Diff:\n${diff}`,
+  ].join('\n')
   let message = await streamCommitMessage(llm, route, system, prompt, signal, body.sessionId, reasoningEffort)
   if (message === '') throw new ApiError('llm-failed', 'the model returned an empty message', 502)
   let check = validateCommitMessage(message, conventions)
@@ -1998,6 +2084,8 @@ async function suggestCommitMessage(ctx, body, signal) {
   ].filter(Boolean).join(' · ')
   return {
     message,
+    scope,
+    files,
     provider: route.provider,
     model: route.model,
     conventions: {
