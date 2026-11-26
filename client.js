@@ -2627,10 +2627,9 @@ window.__ModuleLoader__.load({
       const panelRef = React.useRef(null)
       const [submenu, setSubmenu] = React.useState(null)
       const [effortsCache, setEffortsCache] = React.useState(null)
-      const choiceKey = snapshot.choice === null ? null : `${snapshot.choice.provider}/${snapshot.choice.model}`
-      const currentKey = snapshot.options === null || snapshot.options.current === null || snapshot.options.current === undefined
-        ? null
-        : `${snapshot.options.current.provider}/${snapshot.options.current.model}`
+      const choiceKey = snapshot.choice == null ? null : `${snapshot.choice.provider}/${snapshot.choice.model}`
+      const currentOption = snapshot.options == null ? null : snapshot.options.current ?? null
+      const currentKey = currentOption == null ? null : `${currentOption.provider}/${currentOption.model}`
       React.useEffect(() => {
         if (snapshot.open !== true) return undefined
         const key = choiceKey ?? currentKey
@@ -3209,6 +3208,7 @@ window.__ModuleLoader__.load({
       const [diffExpanded, setDiffExpanded] = React.useState(false)
       const [patchSel, setPatchSel] = React.useState({})
       const [patchBusy, setPatchBusy] = React.useState(false)
+      const [reloadTick, setReloadTick] = React.useState(0)
       const diffMetaRef = React.useRef({ indexTree: '', worktreeHash: null })
       const popupRef = React.useRef(null)
       React.useEffect(() => {
@@ -3388,7 +3388,6 @@ window.__ModuleLoader__.load({
       }, [sessionId, labelRouteKey])
       const requestRef = React.useRef(0)
       const dataRef = React.useRef(null)
-      const [reloadTick, setReloadTick] = React.useState(0)
 
       React.useEffect(() => {
         ensureStyle()
