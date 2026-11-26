@@ -279,6 +279,7 @@ window.__ModuleLoader__.load({
         'tab.title': 'Git 变更',
         'tab.scope.worktree': '工作区',
         'tab.scope.staged': '暂存区',
+        'tab.scope.history': '历史',
         'tab.scope.branch': '分支对比',
         'tab.base': '基线',
         'tab.summary': '{files} 个文件 · +{add} −{del}',
@@ -331,6 +332,40 @@ window.__ModuleLoader__.load({
         'conflict.binary': '二进制文件，无法展示内容',
         'conflict.markers': '仍有 {n} 个冲突标记',
         'conflict.saving': '保存中…',
+        'history.title': '提交历史',
+        'history.empty': '没有可显示的提交',
+        'history.pathFilter': '仅显示该文件的提交',
+        'history.clearPath': '清除路径过滤',
+        'history.refresh': '刷新历史',
+        'history.compare': '比较',
+        'history.base': '基线',
+        'history.target': '目标',
+        'history.aheadBehind': '领先 {ahead} · 落后 {behind}',
+        'history.files': '{n} 个文件',
+        'history.selectFileHint': '选择文件查看差异',
+        'branch.actions': '分支操作',
+        'branch.rename': '重命名',
+        'branch.renameFrom': '原分支名',
+        'branch.renameTo': '新分支名',
+        'branch.delete': '删除分支',
+        'branch.rebase': '变基到',
+        'branch.cherryPick': '拣选提交',
+        'advanced.title': '高级 Git',
+        'advanced.stash': '储藏（stash）',
+        'stash.save': '保存储藏',
+        'stash.apply': '应用',
+        'stash.pop': '应用并删除',
+        'stash.drop': '删除',
+        'tag.create': '创建标签',
+        'tag.namePlaceholder': '标签名',
+        'tag.delete': '删除标签',
+        'revert.action': '还原提交',
+        'reset.action': '重置 HEAD',
+        'reset.mode.soft': 'soft（保留改动）',
+        'reset.mode.mixed': 'mixed（保留工作区）',
+        'reset.mode.hard': 'hard（丢弃改动）',
+        'confirm.title': '需要确认',
+        'confirm.ok': '确认执行',
         'diff.expand': '显示全部',
         'diff.collapse': '收起',
         'tab.side': '并排',
@@ -591,6 +626,7 @@ window.__ModuleLoader__.load({
         'tab.title': 'Git changes',
         'tab.scope.worktree': 'Working tree',
         'tab.scope.staged': 'Staged',
+        'tab.scope.history': 'History',
         'tab.scope.branch': 'Branch',
         'tab.base': 'Base',
         'tab.summary': '{files} files · +{add} −{del}',
@@ -643,6 +679,40 @@ window.__ModuleLoader__.load({
         'conflict.binary': 'Binary file, content not shown',
         'conflict.markers': '{n} conflict marker(s) remain',
         'conflict.saving': 'Saving…',
+        'history.title': 'Commit history',
+        'history.empty': 'No commits to show',
+        'history.pathFilter': 'Only this file',
+        'history.clearPath': 'Clear path filter',
+        'history.refresh': 'Refresh history',
+        'history.compare': 'Compare',
+        'history.base': 'Base',
+        'history.target': 'Target',
+        'history.aheadBehind': 'ahead {ahead} · behind {behind}',
+        'history.files': '{n} file(s)',
+        'history.selectFileHint': 'Select a file to see its diff',
+        'branch.actions': 'Branch actions',
+        'branch.rename': 'Rename',
+        'branch.renameFrom': 'Current branch',
+        'branch.renameTo': 'New branch name',
+        'branch.delete': 'Delete branch',
+        'branch.rebase': 'Rebase onto',
+        'branch.cherryPick': 'Cherry-pick commit',
+        'advanced.title': 'Advanced Git',
+        'advanced.stash': 'Stash',
+        'stash.save': 'Save stash',
+        'stash.apply': 'Apply',
+        'stash.pop': 'Apply and drop',
+        'stash.drop': 'Drop',
+        'tag.create': 'Create tag',
+        'tag.namePlaceholder': 'Tag name',
+        'tag.delete': 'Delete tag',
+        'revert.action': 'Revert commit',
+        'reset.action': 'Reset HEAD',
+        'reset.mode.soft': 'soft (keep changes)',
+        'reset.mode.mixed': 'mixed (keep worktree)',
+        'reset.mode.hard': 'hard (discard changes)',
+        'confirm.title': 'Confirmation required',
+        'confirm.ok': 'Confirm',
         'diff.expand': 'Show all',
         'diff.collapse': 'Collapse',
         'tab.side': 'Side by side',
@@ -1704,6 +1774,20 @@ window.__ModuleLoader__.load({
         '.gct-conflict-body{min-height:120px;max-height:320px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base)}',
         '.gct-conflict-pre{margin:0;padding:6px;font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:12px;line-height:17px;white-space:pre;color:var(--dsw-alias-label-primary)}',
         '.gct-conflict-textarea{width:100%;height:280px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:12px;line-height:17px;padding:6px;resize:vertical}',
+        '.gdt-history{flex:1;min-height:0;display:flex;flex-direction:column}',
+        '.gdt-history-bar{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-wrap:wrap}',
+        '.gdt-history-compare{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-wrap:wrap}',
+        '.gdt-history-split{flex:1;min-height:0;display:flex}',
+        '.gdt-history-list{width:44%;min-width:220px;overflow:auto;border-right:1px solid var(--dsw-alias-border-l1)}',
+        '.gdt-history-row{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-radius:var(--dsw-radius-sm,6px);min-width:0}',
+        '.gdt-history-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+        '.gdt-history-row[data-active="true"]{background:color-mix(in srgb, var(--dsw-alias-link) 12%, transparent)}',
+        '.gdt-history-subject{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}',
+        '.gdt-history-detail{flex:1;min-width:0;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}',
+        '.gdt-history-commit{display:flex;flex-direction:column;gap:4px;min-width:0}',
+        '.gdt-history-files{display:flex;flex-direction:column;gap:2px}',
+        '.gdt-history-diff{border-top:1px solid var(--dsw-alias-border-l1);margin-top:6px;padding-top:6px}',
+        '.gdt-mono{font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:12px}',
       ].join('\n')
       if (existing === null) document.head.appendChild(style)
     }
@@ -3163,6 +3247,82 @@ window.__ModuleLoader__.load({
       }, [repoMenu])
       const [undoDiscard, setUndoDiscard] = React.useState(null)
       const [abortConfirm, setAbortConfirm] = React.useState(false)
+      // ── A4: history / branch maintenance / advanced Git state ─────────────
+      const [historyRows, setHistoryRows] = React.useState(null)
+      const [historyTotal, setHistoryTotal] = React.useState(0)
+      const [historyPath, setHistoryPath] = React.useState(null)
+      const [detailCommit, setDetailCommit] = React.useState(null)
+      const [detailValue, setDetailValue] = React.useState(null)
+      const [compareMode, setCompareMode] = React.useState(false)
+      const [compareBase, setCompareBase] = React.useState('')
+      const [compareTarget, setCompareTarget] = React.useState('')
+      const [compareValue, setCompareValue] = React.useState(null)
+      const [branchNames, setBranchNames] = React.useState([])
+      const [branchAction, setBranchAction] = React.useState(null)
+      const [advancedOpen, setAdvancedOpen] = React.useState(false)
+      const [stashEntries, setStashEntries] = React.useState(null)
+      const [tagList, setTagList] = React.useState(null)
+      const [actionBusy, setActionBusy] = React.useState(null)
+      const [historyFileDiff, setHistoryFileDiff] = React.useState(null)
+
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('branches', { sessionId })
+            if (!cancelled) {
+              setBranchNames([...(value.local ?? []), ...(value.remote ?? [])].map((branch) => branch.name))
+            }
+          } catch {
+            if (!cancelled) setBranchNames([])
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId])
+
+      const loadHistory = React.useCallback(async (path) => {
+        if (sessionId === undefined) return
+        try {
+          const value = await callApi('history', { sessionId, limit: 80, path: path ?? undefined })
+          setHistoryRows(value.commits ?? [])
+          setHistoryTotal(Number(value.total) || 0)
+        } catch (thrown) {
+          setHistoryRows([])
+          setActionError({ code: thrown.code, message: thrown.message })
+        }
+      }, [sessionId])
+
+      React.useEffect(() => {
+        if (sessionId === undefined || scope !== 'history') return undefined
+        void loadHistory(historyPath)
+        setDetailCommit(null)
+        setDetailValue(null)
+        setCompareMode(false)
+        setCompareValue(null)
+      }, [sessionId, scope, historyPath, reloadTick])
+
+      React.useEffect(() => {
+        if (sessionId === undefined || detailCommit === null) {
+          setDetailValue(null)
+          return undefined
+        }
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('commitDetail', { sessionId, commit: detailCommit })
+            if (!cancelled) setDetailValue(value)
+          } catch (thrown) {
+            if (!cancelled) setDetailValue(null)
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, detailCommit])
+
       React.useEffect(() => {
         const node = rootRef.current
         if (typeof ResizeObserver === 'undefined' || node === null) return undefined
@@ -4032,6 +4192,245 @@ window.__ModuleLoader__.load({
         setRepoMenu({ mode: 'file', file, left: event.clientX, top: event.clientY })
       }
 
+      // ── A4: history / compare / branch ops / advanced Git ────────────────
+
+      const runCompare = async () => {
+        if (compareBase === '' || compareTarget === '') return
+        setActionBusy('compare')
+        try {
+          const value = await callApi('compare', { sessionId, base: compareBase, target: compareTarget })
+          setCompareValue(value)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const filterHistoryByPath = () => {
+        if (selected === null) return
+        setHistoryPath(selected.path)
+      }
+
+      const showHistoryFileDiff = async (commit, path) => {
+        if (typeof commit !== 'string' || typeof path !== 'string') return
+        try {
+          const value = await callApi('diff', { sessionId, scope: 'commit', commit, path })
+          setHistoryFileDiff(value)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        }
+      }
+
+      const renameBranchOp = async () => {
+        const from = repoInfo?.branch ?? ''
+        const to = window.prompt(t('branch.renameTo'), from)
+        if (to === null || to.trim() === '' || to.trim() === from) return
+        setBranchAction(null)
+        setActionBusy('rename')
+        try {
+          await callApi('branchRename', { sessionId, from, to: to.trim() })
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const deleteBranchOp = async () => {
+        const name = window.prompt(t('branch.delete'), '')
+        if (name === null || name.trim() === '') return
+        if (window.confirm(`${t('branch.delete')}：${name.trim()}？`)) {
+          setBranchAction(null)
+          setActionBusy('delete')
+          try {
+            await callApi('branchDelete', { sessionId, name: name.trim(), confirmed: true })
+            reload()
+            notifyRepoChanged(sessionId)
+          } catch (thrown) {
+            setActionError({ code: thrown.code, message: thrown.message })
+          } finally {
+            setActionBusy(null)
+          }
+        }
+      }
+
+      const rebaseOp = async () => {
+        const target = window.prompt(t('branch.rebase'), compareTarget ?? 'main')
+        if (target === null || target.trim() === '') return
+        setBranchAction(null)
+        setActionBusy('rebase')
+        try {
+          await callApi('rebase', { sessionId, target: target.trim(), confirmed: true })
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+          void loadChanges()
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const cherryPickOp = async () => {
+        const commit = window.prompt(t('branch.cherryPick'), detailCommit ?? '')
+        if (commit === null || commit.trim() === '') return
+        setBranchAction(null)
+        setActionBusy('cherry-pick')
+        try {
+          await callApi('cherryPick', { sessionId, commits: [commit.trim()], confirmed: true })
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+          void loadChanges()
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const openAdvanced = async (element) => {
+        const rect = element?.getBoundingClientRect?.()
+        if (rect !== undefined && rect !== null) {
+          setRepoMenu({
+            mode: 'advanced',
+            left: Math.max(8, Math.min(rect.left, (typeof window === 'undefined' ? 0 : window.innerWidth) - 360)),
+            top: Math.max(8, Math.min(rect.bottom + 6, (typeof window === 'undefined' ? 0 : window.innerHeight) - 500)),
+          })
+        } else {
+          setRepoMenu({ mode: 'advanced' })
+        }
+        setActionBusy('load-advanced')
+        try {
+          const [stashValue, tagValue] = await Promise.all([
+            callApi('stashList', { sessionId }),
+            callApi('tagList', { sessionId }),
+          ])
+          setStashEntries(stashValue.entries ?? [])
+          setTagList(tagValue.tags ?? [])
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const refreshAdvanced = async () => {
+        setActionBusy('load-advanced')
+        try {
+          const [stashValue, tagValue] = await Promise.all([
+            callApi('stashList', { sessionId }),
+            callApi('tagList', { sessionId }),
+          ])
+          setStashEntries(stashValue.entries ?? [])
+          setTagList(tagValue.tags ?? [])
+        } catch {
+          // Keep the previous lists when a refresh fails.
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const stashSaveOp = async () => {
+        setActionBusy('stash.save')
+        try {
+          const value = await callApi('stashSave', { sessionId, message: `dsh-git-dock ${new Date().toISOString()}` })
+          setStashEntries(value.entries ?? [])
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const stashApplyOp = async (entry, drop) => {
+        setActionBusy(`stash.${drop ? 'pop' : 'apply'}`)
+        try {
+          const value = await callApi('stashApply', { sessionId, ref: entry.ref, drop: drop === true })
+          setStashEntries(value.entries ?? [])
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const stashDropOp = async (entry) => {
+        setActionBusy('stash.drop')
+        try {
+          const value = await callApi('stashDrop', { sessionId, ref: entry.ref })
+          setStashEntries(value.entries ?? [])
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const tagCreateOp = async () => {
+        const name = window.prompt(t('tag.create'), '')
+        if (name === null || name.trim() === '') return
+        setActionBusy('tag.create')
+        try {
+          await callApi('tagCreate', { sessionId, name: name.trim(), ref: 'HEAD' })
+          await refreshAdvanced()
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const tagDeleteOp = async (tag) => {
+        setActionBusy('tag.delete')
+        try {
+          await callApi('tagDelete', { sessionId, name: tag.name })
+          await refreshAdvanced()
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const revertOp = async () => {
+        const commit = detailCommit ?? repoInfo?.head ?? ''
+        if (!window.confirm(`${t('revert.action')}: ${commit.slice(0, 8)}？`)) return
+        setActionBusy('revert')
+        try {
+          await callApi('revert', { sessionId, commit, confirmed: true })
+          reload()
+          notifyRepoChanged(sessionId)
+          if (scope === 'history') void loadHistory(historyPath)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
+      const resetOp = async (mode) => {
+        const commit = detailCommit ?? repoInfo?.head ?? ''
+        if (mode === 'hard' && !window.confirm(`${t('reset.mode.hard')}: ${commit.slice(0, 8)}？`)) return
+        setActionBusy('reset')
+        try {
+          await callApi('reset', { sessionId, commit, mode, confirmed: true })
+          reload()
+          notifyRepoChanged(sessionId)
+          if (scope === 'history') void loadHistory(historyPath)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setActionBusy(null)
+        }
+      }
+
       const copyPath = async (path) => {
         try {
           if (typeof navigator === 'undefined' || navigator.clipboard === undefined) throw new Error('no clipboard')
@@ -4133,6 +4532,16 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: 'gdt-tab',
+          'data-active': scope === 'history' ? 'true' : 'false',
+          onClick: () => {
+            setScope('history')
+            setBaseSel(null)
+            setSelected(null)
+          },
+        }, t('tab.scope.history')),
+        h('button', {
+          type: 'button',
+          className: 'gdt-tab',
           'data-active': scope === 'branch' ? 'true' : 'false',
           onClick: () => {
             setScope('branch')
@@ -4201,7 +4610,21 @@ window.__ModuleLoader__.load({
           onClick: () => {
             void loadChanges()
           },
-        }, status === 'loading' && data !== null ? h('span', { className: 'gdt-spinner' }) : h(RefreshIcon, { size: 12 }), t('tab.refresh')))
+        }, status === 'loading' && data !== null ? h('span', { className: 'gdt-spinner' }) : h(RefreshIcon, { size: 12 }), t('tab.refresh')),
+        scope === 'history'
+          ? h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            title: t('history.compare'),
+            onClick: () => setCompareMode((value) => !value),
+          }, compareMode ? t('history.title') : t('history.compare'))
+          : null,
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          title: t('advanced.title'),
+          onClick: (event) => void openAdvanced(event.currentTarget),
+        }, t('advanced.title')))
 
       const statusNodes = []
       if (status === 'error') {
@@ -4847,6 +5270,52 @@ window.__ModuleLoader__.load({
               onClick: () => void addRepositoryPath(),
             }, t('repo.add'))),
           repoError === null ? null : h('div', { className: 'gdt-error' }, errorText(repoError)))
+        : repoMenu.mode === 'advanced'
+          ? h('div', { className: 'gdt-popup-body' },
+            h('div', { className: 'gdt-popup-title' }, t('advanced.title')),
+            h('div', { className: 'gdt-popup-sep' }),
+            h('div', { className: 'gct-config-title' }, t('advanced.stash')),
+            h('div', { className: 'gct-actions' },
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn',
+                disabled: actionBusy !== null,
+                onClick: () => void stashSaveOp(),
+              }, actionBusy === 'stash.save' ? t('sync.busy') : t('stash.save')),
+              h('button', { type: 'button', className: 'gdt-btn', onClick: () => void refreshAdvanced() }, t('tab.refresh'))),
+            (stashEntries ?? []).length === 0
+              ? h('div', { className: 'gdt-note' }, t('repo.empty'))
+              : (stashEntries ?? []).map((entry) => h('div', { key: entry.ref, className: 'gdt-popup-row' },
+                h('span', { className: 'gdt-path' }, entry.message || entry.ref),
+                h('span', { className: 'gdt-popup-sub' }, entry.commit.slice(0, 8)),
+                h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void stashApplyOp(entry, false) }, t('stash.apply')),
+                h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void stashApplyOp(entry, true) }, t('stash.pop')),
+                h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void stashDropOp(entry) }, t('stash.drop')))),
+            h('div', { className: 'gdt-popup-sep' }),
+            h('div', { className: 'gct-config-title' }, t('tag.create')),
+            h('div', { className: 'gct-actions' },
+              h('button', { type: 'button', className: 'gdt-btn', onClick: () => void tagCreateOp() }, t('tag.create')),
+              h('button', { type: 'button', className: 'gdt-btn', onClick: () => void refreshAdvanced() }, t('tab.refresh'))),
+            (tagList ?? []).length === 0
+              ? h('div', { className: 'gdt-note' }, t('repo.empty'))
+              : (tagList ?? []).map((tag) => h('div', { key: tag.name, className: 'gdt-popup-row' },
+                h('span', { className: 'gdt-path' }, tag.name),
+                h('span', { className: 'gdt-popup-sub' }, tag.commit.slice(0, 8)),
+                h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void tagDeleteOp(tag) }, t('tag.delete')))),
+            h('div', { className: 'gdt-popup-sep' }),
+            h('div', { className: 'gct-actions' },
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void revertOp() }, t('revert.action')),
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => resetOp('soft') }, t('reset.mode.soft')),
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => resetOp('mixed') }, t('reset.mode.mixed')),
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => resetOp('hard') }, t('reset.mode.hard'))),
+            h('div', { className: 'gdt-popup-sep' }),
+            h('div', { className: 'gct-config-title' }, t('branch.actions')),
+            h('div', { className: 'gct-actions' },
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null || scope === 'branch', onClick: () => void renameBranchOp() }, t('branch.rename')),
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void deleteBranchOp() }, t('branch.delete')),
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void rebaseOp() }, t('branch.rebase')),
+              h('button', { type: 'button', className: 'gdt-btn', disabled: actionBusy !== null, onClick: () => void cherryPickOp() }, t('branch.cherryPick')))
+          )
         : h('div', { className: 'gdt-popup-body' },
           h('div', { className: 'gdt-popup-title', title: repoMenu.file.path }, repoMenu.file.path),
           h('div', {
@@ -4975,6 +5444,83 @@ window.__ModuleLoader__.load({
         patchBar,
         diffBody)
 
+      const historyPane = scope !== 'history' ? null : h('div', { className: 'gdt-history' },
+        h('div', { className: 'gdt-history-bar' },
+          h('span', { className: 'gdt-summary' }, `${t('history.title')} · ${historyTotal}`),
+          historyPath === null ? null : h('span', { className: 'gdt-summary' }, `${t('history.pathFilter')}: ${historyPath}`),
+          historyPath === null ? null : h('button', { type: 'button', className: 'gdt-btn', onClick: () => setHistoryPath(null) }, t('history.clearPath')),
+          h('span', { className: 'gdt-spacer' }),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => void loadHistory(historyPath) }, t('history.refresh'))),
+        compareMode
+          ? h('div', { className: 'gdt-history-compare' },
+            h('select', {
+              className: 'gdt-select',
+              value: compareBase,
+              'aria-label': t('history.base'),
+              onChange: (event) => setCompareBase(event.target.value),
+            }, h('option', { value: '' }, t('history.base')), branchNames.map((name) => h('option', { key: `b-${name}`, value: name }, name))),
+            h('select', {
+              className: 'gdt-select',
+              value: compareTarget,
+              'aria-label': t('history.target'),
+              onChange: (event) => setCompareTarget(event.target.value),
+            }, h('option', { value: '' }, t('history.target')), branchNames.map((name) => h('option', { key: `t-${name}`, value: name }, name))),
+            h('button', {
+              type: 'button',
+              className: 'gdt-btn',
+              disabled: actionBusy === 'compare' || compareBase === '' || compareTarget === '',
+              onClick: () => void runCompare(),
+            }, t('history.compare')),
+            compareValue === null
+              ? null
+              : h('span', { className: 'gdt-summary' }, t('history.aheadBehind', { ahead: compareValue.ahead, behind: compareValue.behind })))
+          : null,
+        h('div', { className: 'gdt-history-split' },
+          h('div', { className: 'gdt-history-list' },
+            (historyRows ?? []).length === 0
+              ? h('div', { className: 'gdt-note' }, t('history.empty'))
+              : (historyRows ?? []).map((commit) => h('div', {
+                key: commit.id,
+                className: 'gdt-history-row',
+                'data-active': detailCommit === commit.id ? 'true' : 'false',
+                role: 'button',
+                tabIndex: 0,
+                onClick: () => setDetailCommit(commit.id),
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  setDetailCommit(commit.id)
+                },
+              },
+              h('span', { className: 'gdt-mono' }, commit.short),
+              h('span', { className: 'gdt-history-subject', title: commit.subject }, commit.subject),
+              h('span', { className: 'gdt-summary' }, new Date(commit.at * 1000).toLocaleDateString())))),
+          h('div', { className: 'gdt-history-detail' },
+            detailValue === null
+              ? h('div', { className: 'gdt-note' }, t('history.selectFileHint'))
+              : h('div', { className: 'gdt-history-commit' },
+                h('div', { className: 'gdt-mono', style: { fontSize: '12px' } }, detailValue.commit?.id ?? ''),
+                h('div', { className: 'gdt-history-subject' }, detailValue.commit?.subject ?? ''),
+                h('div', { className: 'gdt-summary' }, `${detailValue.commit?.author ?? ''} · ${new Date((detailValue.commit?.at ?? 0) * 1000).toLocaleString()}`),
+                h('div', { className: 'gdt-summary' }, t('history.files', { n: detailValue.files.length })),
+                h('div', { className: 'gdt-history-files' }, detailValue.files.map((file) => h('div', {
+                  key: file.path,
+                  className: 'gct-config-row',
+                  role: 'button',
+                  tabIndex: 0,
+                  onClick: () => void showHistoryFileDiff(detailCommit, file.path),
+                  onKeyDown: (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    void showHistoryFileDiff(detailCommit, file.path)
+                  },
+                },
+                h('span', { className: 'gdt-status', 'data-status': file.status }, file.status),
+                h('span', { className: 'gdt-path', title: file.path }, file.path),
+                h('span', { className: 'gdt-counts' }, `${file.additions ?? 0} / ${file.deletions ?? 0}`)))),
+                historyFileDiff === null ? null : h('div', { className: 'gdt-scroll gdt-history-diff' },
+                  h(UnifiedDiff, { hunks: historyFileDiff.hunks, wrap, lang: languageOf(historyFileDiff.path) }))))))
+
       return h('div', { className: 'gdt-root', ref: rootRef, 'data-narrow': narrow ? 'true' : 'false' },
         toolbar,
         commitBar,
@@ -4983,7 +5529,9 @@ window.__ModuleLoader__.load({
         syncDetails,
         banners,
         menuPopup,
-        h('div', { className: 'gdt-split' }, statusNodes, fileList, diffPane))
+        scope === 'history'
+          ? historyPane
+          : h('div', { className: 'gdt-split' }, statusNodes, fileList, diffPane))
     }
 
     // ── Full-screen diff preview (double-click a changed file) ─────────────

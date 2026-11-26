@@ -101,6 +101,15 @@ switching and creating branches.
   Accept incoming (`git checkout --ours|--theirs` + `git add`), and lets the user
   edit the result before saving and marking it resolved. Resolving never commits:
   the merge still completes only on explicit confirmation.
+- **History and advanced Git (A4)** — a fourth tab lists commits (path-filtered
+  history supported) with author, date and subject; selecting a commit shows its
+  changed files and, per file, the `git show` diff. A compare mode reports
+  ahead/behind plus file changes between two refs. The branch-actions menu offers
+  rename and delete (current branch protected, forced delete needs confirmation),
+  rebase onto a ref, and cherry-pick; interrupted sequences expose
+  continue/abort. The advanced menu covers stash save/apply/pop/drop, tag
+  create/delete, revert and reset (`--soft`/`--mixed`/`--hard`, hard requires a
+  backup ref plus confirmation). Every one of these writes an audit record.
 - **Repository registry (A1)** — repositories are registered under
   `<DSH_HOME>/dsh-git-dock/repositories.json` (canonical real path, id, timestamps)
   and the review tab's repository menu switches the session's active repository or

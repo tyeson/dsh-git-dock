@@ -40,6 +40,8 @@ const UNTRACKED_READ_LIMIT = 1024 * 1024
 const GIT_ENV = Object.freeze({
   GIT_OPTIONAL_LOCKS: '0',
   GIT_TERMINAL_PROMPT: '0',
+  GIT_EDITOR: 'true',
+  EDITOR: 'true',
   LC_ALL: 'C',
 })
 
@@ -1058,6 +1060,451 @@ async function saveConflictResult(ctx, body, signal) {
   })
 }
 
+// ── A4: history, branch maintenance, stash, tags, revert/reset ─────────────
+
+/** Field and record separators used by the log format. */
+const LOG_FORMAT = ['%H', '%h', '%an', '%ae', '%at', '%P', '%s'].join('%x1f') + '%x1e'
+
+/** Parse `git log` records into commit rows. */
+function parseLogRecords(raw) {
+  return String(raw ?? '')
+    .split('\x1e')
+    .map((record) => record.trim())
+    .filter((record) => record !== '')
+    .map((record) => {
+      const parts = record.split('\x1f')
+      return {
+        id: parts[0] ?? '',
+        short: parts[1] ?? '',
+        author: parts[2] ?? '',
+        email: parts[3] ?? '',
+        at: Number(parts[4]) || 0,
+        parents: typeof parts[5] === 'string' ? parts[5].split(' ').filter((value) => value !== '') : [],
+        subject: parts.slice(6).join('\x1f'),
+      }
+    })
+}
+
+/** Clamp a page size to a sane window. */
+function clampLimit(value, fallback, max) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return fallback
+  return Math.min(Math.floor(number), max)
+}
+
+/**
+ * Commit list for one repository, optionally narrowed to one path.
+ *
+ * @returns {Promise<{ commits: object[], total: number, path: string|null }>} history page.
+ */
+async function readHistory(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  const limit = clampLimit(body.limit, 50, 200)
+  const offset = Math.max(0, Math.floor(Number(body.offset) || 0))
+  const path = typeof body.path === 'string' && body.path !== '' ? assertRepoPath(body.path) : null
+  const args = ['log', `--format=${LOG_FORMAT}`, '--no-color']
+  if (path !== null) args.push('--follow', '--', path)
+  args.push(`--skip=${offset}`, `--max-count=${limit}`)
+  const [commitsRaw, countRaw] = await Promise.all([
+    runGit(state.repoRoot, args, { signal, maxBytes: 8_000_000 }),
+    runGit(state.repoRoot, ['rev-list', '--count', 'HEAD', ...(path === null ? [] : ['--', path])], { signal }),
+  ])
+  return { commits: parseLogRecords(commitsRaw), total: Number(countRaw.trim()) || 0, path }
+}
+
+/**
+ * One commit with its changed files and an optional single-file diff.
+ *
+ * @param {object} body - `{ sessionId, commit, path? }`.
+ * @returns {Promise<object>} commit detail.
+ */
+async function readCommitDetail(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  assertSafeRef(body.commit)
+  const commit = body.commit
+  try {
+    await gitText(state.repoRoot, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`], { signal })
+  } catch {
+    throw new ApiError('unknown-ref', `commit not found: ${commit}`, 404)
+  }
+  const metaRaw = await gitText(state.repoRoot, ['show', '-s', `--format=${LOG_FORMAT}`, commit], { signal })
+  const row = parseLogRecords(metaRaw)[0] ?? null
+  const nameStatusRaw = await runGit(
+    state.repoRoot,
+    ['diff-tree', '--no-commit-id', '--name-status', '-r', '--root', '-m', '--first-parent', '-z', commit],
+    { signal, exitCodes: [0, 1] },
+  )
+  const numstatRaw = await runGit(
+    state.repoRoot,
+    ['diff-tree', '--no-commit-id', '--numstat', '-r', '--root', '-m', '--first-parent', '-z', commit],
+    { signal, exitCodes: [0, 1] },
+  )
+  const counts = parseNumstat(numstatRaw)
+  const files = parseNameStatus(nameStatusRaw).map((entry) => Object.assign({}, entry, counts.get(entry.path) ?? {}))
+  let diff = null
+  if (typeof body.path === 'string' && body.path !== '') {
+    const path = assertRepoPath(body.path)
+    const raw = await runGit(
+      state.repoRoot,
+      ['show', '--no-color', '--no-ext-diff', '-U3', commit, '--', path],
+      { signal, maxBytes: DIFF_OUTPUT_LIMIT, exitCodes: [0, 1] },
+    )
+    const parsed = parseUnifiedDiff(raw)
+    diff = { path, binary: parsed.binary, hunks: parsed.hunks, truncated: parsed.truncated }
+  }
+  return { commit: row, files, diff, parents: row === null ? [] : row.parents }
+}
+
+/**
+ * Compare two refs: divergence, commits on one side, and file changes.
+ *
+ * @param {object} body - `{ sessionId, base, target }`.
+ * @returns {Promise<object>} comparison result.
+ */
+async function compareRefs(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  assertSafeRef(body.base)
+  assertSafeRef(body.target)
+  const base = body.base
+  const target = body.target
+  for (const ref of [base, target]) {
+    try {
+      await gitText(state.repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { signal })
+    } catch {
+      throw new ApiError('unknown-ref', `ref not found: ${ref}`, 404)
+    }
+  }
+  const [countsRaw, commitsRaw, filesRaw] = await Promise.all([
+    gitText(state.repoRoot, ['rev-list', '--left-right', '--count', `${base}...${target}`], { signal }),
+    runGit(state.repoRoot, ['log', `--format=${LOG_FORMAT}`, `${base}..${target}`], { signal, maxBytes: 4_000_000 }),
+    runGit(state.repoRoot, ['diff', '--name-status', '-z', base, target], { signal, maxBytes: 2_000_000 }),
+  ])
+  const parts = countsRaw.trim().split(/\s+/)
+  return {
+    base,
+    target,
+    behind: Number(parts[0]) || 0,
+    ahead: Number(parts[1]) || 0,
+    commits: parseLogRecords(commitsRaw),
+    files: parseNameStatus(filesRaw),
+  }
+}
+
+/** Rename a local branch. */
+async function renameBranchOp(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.from)
+    assertSafeRef(body.to)
+    const from = body.from
+    const to = body.to
+    await assertBranchName(before.repoRoot, to, signal)
+    const exists = await runGit(before.repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${from}`], { signal }).then(() => true, () => false)
+    if (!exists) throw new ApiError('unknown-branch', `branch not found: ${from}`, 404)
+    if (from === to) throw new ApiError('same-branch', 'the new name equals the current name', 400)
+    const taken = await runGit(before.repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${to}`], { signal }).then(() => true, () => false)
+    if (taken) throw new ApiError('branch-exists', `branch already exists: ${to}`, 409)
+    await runGit(before.repoRoot, ['branch', '--move', from, to], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'branch.rename', repoRoot: before.repoRoot, branch: from, target: [to], result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal), branches: await readBranches(before.repoRoot, signal) }
+  })
+}
+
+/** Delete a local branch; `-D` only with explicit confirmation. */
+async function deleteBranchOp(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.name)
+    const name = body.name
+    if (before.branch === name) throw new ApiError('current-branch', 'cannot delete the checked-out branch', 409)
+    const exists = await runGit(before.repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { signal }).then(() => true, () => false)
+    if (!exists) throw new ApiError('unknown-branch', `branch not found: ${name}`, 404)
+    const force = body.force === true && body.confirmed === true
+    const args = force ? ['branch', '-D', name] : ['branch', '-d', name]
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    if (result.code !== 0) {
+      throw new ApiError('branch-not-merged', 'the branch has unmerged commits; confirm a forced delete', 409, {
+        detail: String(result.stderr ?? '').slice(0, 2_000),
+      })
+    }
+    await appendAudit({ action: 'branch.delete', repoRoot: before.repoRoot, branch: name, result: force ? 'forced' : 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal), branches: await readBranches(before.repoRoot, signal) }
+  })
+}
+
+/** Rebase the current branch onto another ref. */
+async function rebaseOnto(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.target)
+    const target = body.target
+    assertSafeRef(typeof body.upstream === 'string' && body.upstream !== '' ? body.upstream : 'HEAD')
+    const upstream = typeof body.upstream === 'string' && body.upstream !== '' ? body.upstream : null
+    const args = upstream === null ? ['rebase', target] : ['rebase', '--onto', target, upstream]
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    if (result.code !== 0) {
+      await appendAudit({ action: 'rebase', repoRoot: before.repoRoot, branch: before.branch, target: [target], result: 'conflict' })
+      throw new ApiError('rebase-conflict', 'the rebase stopped with conflicts', 409, {
+        operation: after.operation,
+        conflicts: after.conflictTypes,
+        detail: String(result.stderr ?? '').slice(0, 2_000),
+      })
+    }
+    await appendAudit({ action: 'rebase', repoRoot: before.repoRoot, branch: before.branch, target: [target], result: 'ok' })
+    return { repo: after }
+  })
+}
+
+/** Cherry-pick one or more commits onto the current branch. */
+async function cherryPickCommit(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    const commits = (Array.isArray(body.commits) ? body.commits : []).map((value) => { assertSafeRef(value); return value })
+    if (commits.length === 0) throw new ApiError('bad-request', 'at least one commit is required', 400)
+    const args = ['cherry-pick', ...commits]
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    if (result.code !== 0) {
+      throw new ApiError('cherry-pick-conflict', 'the cherry-pick stopped with conflicts', 409, {
+        operation: after.operation,
+        conflicts: after.conflictTypes,
+        detail: String(result.stderr ?? '').slice(0, 2_000),
+      })
+    }
+    await appendAudit({ action: 'cherry-pick', repoRoot: before.repoRoot, branch: before.branch, target: commits, result: 'ok' })
+    return { repo: after }
+  })
+}
+
+/** Continue an interrupted rebase/cherry-pick/revert. */
+async function continueSequence(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    const map = { rebase: ['rebase', '--continue'], 'cherry-pick': ['cherry-pick', '--continue'], revert: ['revert', '--continue'] }
+    const args = Object.hasOwn(map, before.operation) ? map[before.operation] : null
+    if (args === null) throw new ApiError('no-operation', `no sequence is in progress (${before.operation})`, 409)
+    if (before.conflictPaths.length > 0) {
+      throw new ApiError('conflicts-remain', 'resolve every conflicted file first', 409, { conflicts: before.conflictTypes })
+    }
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    if (result.code !== 0) {
+      throw new ApiError('sequence-failed', firstLine(result.stderr) || `git ${args.join(' ')} failed`, 409, { detail: String(result.stderr ?? '').slice(0, 2_000) })
+    }
+    await appendAudit({ action: 'sequence.continue', repoRoot: before.repoRoot, branch: before.branch, result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Abort an interrupted rebase/cherry-pick/revert. */
+async function abortSequence(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    const map = { rebase: ['rebase', '--abort'], 'cherry-pick': ['cherry-pick', '--abort'], revert: ['revert', '--abort'] }
+    const args = Object.hasOwn(map, before.operation) ? map[before.operation] : null
+    if (args === null) throw new ApiError('no-operation', `no sequence is in progress (${before.operation})`, 409)
+    await runGit(before.repoRoot, args, { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'sequence.abort', repoRoot: before.repoRoot, branch: before.branch, result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** List lightweight and annotated tags with their target commits. */
+async function listTags(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  const namesRaw = await runGit(state.repoRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/tags'], { signal })
+  const names = String(namesRaw).split('\n').map((name) => name.trim()).filter(Boolean).slice(0, 200)
+  const tags = await Promise.all(names.map(async (name) => {
+    try {
+      const metaRaw = await gitText(state.repoRoot, ['log', '-1', `--format=${LOG_FORMAT}`, name], { signal })
+      const row = parseLogRecords(metaRaw)[0] ?? null
+      return {
+        name,
+        commit: row?.id ?? '',
+        createdAt: row?.at ?? 0,
+        subject: row?.subject ?? '',
+      }
+    } catch {
+      return { name, commit: '', createdAt: 0, subject: '' }
+    }
+  }))
+  tags.sort((left, right) => right.createdAt - left.createdAt || left.name.localeCompare(right.name))
+  return { tags }
+}
+
+/** Create a tag, annotated when a message is supplied. */
+async function createTag(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.name)
+    const name = body.name
+    assertSafeRef(typeof body.ref === 'string' && body.ref !== '' ? body.ref : 'HEAD')
+    const ref = typeof body.ref === 'string' && body.ref !== '' ? body.ref : 'HEAD'
+    try {
+      await runGit(before.repoRoot, ['check-ref-format', '--branch', name], { signal, exitCodes: [0, 1] })
+    } catch {
+      throw new ApiError('invalid-name', `invalid tag name: ${name}`, 400)
+    }
+    const exists = await runGit(before.repoRoot, ['show-ref', '--verify', '--quiet', `refs/tags/${name}`], { signal }).then(() => true, () => false)
+    if (exists) throw new ApiError('tag-exists', `tag already exists: ${name}`, 409)
+    const message = typeof body.message === 'string' ? body.message.trim() : ''
+    const args = message === '' ? ['tag', name, ref] : ['tag', '-a', name, '-m', message, ref]
+    await runGit(before.repoRoot, args, { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'tag.create', repoRoot: before.repoRoot, target: [name, ref], result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** Delete one tag. */
+async function deleteTag(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.name)
+    const name = body.name
+    const result = await runGit(before.repoRoot, ['tag', '-d', name], { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    if (result.code !== 0) {
+      throw new ApiError('unknown-tag', `tag not found: ${name}`, 404, { detail: String(result.stderr ?? '').slice(0, 1_000) })
+    }
+    await appendAudit({ action: 'tag.delete', repoRoot: before.repoRoot, target: [name], result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
+/** List stash entries. */
+async function listStash(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  const format = ['%gd', '%H', '%gs', '%ct'].join('%x1f') + '%x1e'
+  const raw = await runGit(state.repoRoot, ['stash', 'list', `--format=${format}`], { signal })
+  const entries = String(raw).split('\x1e').map((row) => row.trim()).filter(Boolean).map((row) => {
+    const parts = row.split('\x1f')
+    return { ref: parts[0] ?? '', commit: parts[1] ?? '', message: parts[2] ?? '', at: Number(parts[3]) || 0 }
+  })
+  return { entries }
+}
+
+/** Save the current changes into a stash. */
+async function stashSave(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'none') throw new ApiError('operation-in-progress', `a ${before.operation} is in progress`, 409)
+    const message = typeof body.message === 'string' && body.message.trim() !== '' ? body.message.trim() : `dsh-git-dock ${new Date().toISOString()}`
+    const paths = Array.isArray(body.paths) ? normalizePaths(body.paths) : []
+    const args = ['stash', 'push', '--include-untracked', '-m', message]
+    if (paths.length > 0) args.push('--', ...paths)
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    if (result.code !== 0 && !/No local changes to save/i.test(String(result.stdout ?? '') + String(result.stderr ?? ''))) {
+      throw new ApiError('stash-failed', firstLine(result.stderr) || 'git stash push failed', 409, { detail: String(result.stderr ?? '').slice(0, 2_000) })
+    }
+    await appendAudit({ action: 'stash.save', repoRoot: before.repoRoot, branch: before.branch, result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal), entries: (await listStash(ctx, body, signal)).entries }
+  })
+}
+
+/** Apply or pop one stash entry. */
+async function stashApply(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'none') throw new ApiError('operation-in-progress', `a ${before.operation} is in progress`, 409)
+    assertSafeRef(body.ref)
+    const ref = body.ref
+    if (!/^stash@\{\d+\}$/.test(ref)) throw new ApiError('bad-request', 'invalid stash reference', 400)
+    const args = body.drop === true ? ['stash', 'pop', ref] : ['stash', 'apply', ref]
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    if (result.code !== 0) {
+      throw new ApiError('stash-apply-failed', firstLine(result.stderr) || 'git stash apply failed', 409, { detail: String(result.stderr ?? '').slice(0, 2_000) })
+    }
+    await appendAudit({ action: 'stash.apply', repoRoot: before.repoRoot, branch: before.branch, target: [ref], result: 'ok' })
+    return { repo: await readRepoState(ctx, body.sessionId, signal), entries: (await listStash(ctx, body, signal)).entries }
+  })
+}
+
+/** Drop one stash entry. */
+async function stashDrop(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertSafeRef(body.ref)
+    const ref = body.ref
+    if (!/^stash@\{\d+\}$/.test(ref)) throw new ApiError('bad-request', 'invalid stash reference', 400)
+    await runGit(before.repoRoot, ['stash', 'drop', ref], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'stash.drop', repoRoot: before.repoRoot, branch: before.branch, target: [ref], result: 'ok' })
+    return { entries: (await listStash(ctx, body, signal)).entries }
+  })
+}
+
+/** Revert one commit without opening an editor. */
+async function revertCommitOp(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.commit)
+    const commit = body.commit
+    try {
+      await gitText(before.repoRoot, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`], { signal })
+    } catch {
+      throw new ApiError('unknown-ref', `commit not found: ${commit}`, 404)
+    }
+    const result = await runGit(before.repoRoot, ['revert', '--no-edit', commit], { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    if (result.code !== 0) {
+      throw new ApiError('revert-conflict', 'the revert stopped with conflicts', 409, { operation: after.operation, conflicts: after.conflictTypes })
+    }
+    await appendAudit({ action: 'revert', repoRoot: before.repoRoot, branch: before.branch, target: [commit], result: 'ok' })
+    return { repo: after }
+  })
+}
+
+/** Reset HEAD to a commit; `--hard` needs confirmation and writes a backup ref. */
+async function resetTo(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    assertNotBusy(before, body.confirmed)
+    assertSafeRef(body.commit)
+    const commit = body.commit
+    const mode = body.mode === 'soft' || body.mode === 'mixed' ? body.mode : 'hard'
+    try {
+      await gitText(before.repoRoot, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`], { signal })
+    } catch {
+      throw new ApiError('unknown-ref', `commit not found: ${commit}`, 404)
+    }
+    if (mode === 'hard') {
+      if (body.confirmed !== true) throw new ApiError('confirm-required', 'a hard reset discards worktree changes and needs confirmation', 409)
+      await backupHead(before.repoRoot, 'pre-reset', signal)
+    }
+    const args = ['reset', mode === 'mixed' ? '--mixed' : `--${mode}`, commit]
+    const result = await runGit(before.repoRoot, args, { signal, rawResult: true, exitCodes: [0, 1], timeoutMs: WRITE_TIMEOUT_MS })
+    if (result.code !== 0) {
+      throw new ApiError('reset-failed', firstLine(result.stderr) || 'git reset failed', 409, { detail: String(result.stderr ?? '').slice(0, 2_000) })
+    }
+    await appendAudit({
+      action: 'reset',
+      repoRoot: before.repoRoot,
+      branch: before.branch,
+      target: [commit],
+      result: mode,
+    })
+    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+  })
+}
+
 /**
  * Change list for one scope: the working tree, or the branch against a base.
  *
@@ -1154,12 +1601,15 @@ async function readChanges(ctx, body, signal) {
 async function readDiff(ctx, body, signal) {
   const state = await readRepoState(ctx, body.sessionId, signal)
   const path = assertRepoPath(body.path)
-  const scope = body.scope === 'branch' ? 'branch' : body.scope === 'staged' ? 'staged' : 'worktree'
+  const scope = body.scope === 'branch' ? 'branch' : body.scope === 'staged' ? 'staged' : body.scope === 'commit' ? 'commit' : 'worktree'
   let args
   if (scope === 'branch') {
     const resolved = await resolveBase(state.repoRoot, body.base, signal)
     if (resolved.base === null) throw new ApiError('no-base', 'no base branch could be resolved', 409)
     args = ['diff', '--no-color', '--no-ext-diff', '-U3', `${resolved.base}...HEAD`, '--', path]
+  } else if (scope === 'commit') {
+    assertSafeRef(body.commit)
+    args = ['show', '--no-color', '--no-ext-diff', '-U3', body.commit, '--', path]
   } else if (scope === 'staged') {
     args = ['diff', '--cached', '--no-color', '--no-ext-diff', '-U3', '--', path]
   } else if (body.untracked === true) {
@@ -3415,6 +3865,98 @@ const API = {
       const after = await readRepoState(ctx, body.sessionId, signal)
       return { repo: after, branches: await readBranches(after.repoRoot, signal) }
     })
+  },
+
+  // ── A4: history, branches, stash, tags, revert/reset ─────────────────────
+
+  /** Commit list, optionally narrowed to one path. */
+  async history(ctx, body, signal) {
+    return readHistory(ctx, body, signal)
+  },
+
+  /** One commit with its files and an optional single-file diff. */
+  async commitDetail(ctx, body, signal) {
+    return readCommitDetail(ctx, body, signal)
+  },
+
+  /** Divergence, one-sided commits and file changes between two refs. */
+  async compare(ctx, body, signal) {
+    return compareRefs(ctx, body, signal)
+  },
+
+  /** Rename a local branch. */
+  async branchRename(ctx, body, signal) {
+    return renameBranchOp(ctx, body, signal)
+  },
+
+  /** Delete a local branch (`force` requires `confirmed`). */
+  async branchDelete(ctx, body, signal) {
+    return deleteBranchOp(ctx, body, signal)
+  },
+
+  /** Rebase the current branch onto another ref. */
+  async rebase(ctx, body, signal) {
+    return rebaseOnto(ctx, body, signal)
+  },
+
+  /** Cherry-pick commits onto the current branch. */
+  async cherryPick(ctx, body, signal) {
+    return cherryPickCommit(ctx, body, signal)
+  },
+
+  /** Continue an interrupted rebase / cherry-pick / revert. */
+  async sequenceContinue(ctx, body, signal) {
+    return continueSequence(ctx, body, signal)
+  },
+
+  /** Abort an interrupted rebase / cherry-pick / revert. */
+  async sequenceAbort(ctx, body, signal) {
+    return abortSequence(ctx, body, signal)
+  },
+
+  /** List tags. */
+  async tagList(ctx, body, signal) {
+    return listTags(ctx, body, signal)
+  },
+
+  /** Create a tag (annotated when a message is given). */
+  async tagCreate(ctx, body, signal) {
+    return createTag(ctx, body, signal)
+  },
+
+  /** Delete a tag. */
+  async tagDelete(ctx, body, signal) {
+    return deleteTag(ctx, body, signal)
+  },
+
+  /** List stash entries. */
+  async stashList(ctx, body, signal) {
+    return listStash(ctx, body, signal)
+  },
+
+  /** Save current changes into a stash. */
+  async stashSave(ctx, body, signal) {
+    return stashSave(ctx, body, signal)
+  },
+
+  /** Apply or pop one stash entry. */
+  async stashApply(ctx, body, signal) {
+    return stashApply(ctx, body, signal)
+  },
+
+  /** Drop one stash entry. */
+  async stashDrop(ctx, body, signal) {
+    return stashDrop(ctx, body, signal)
+  },
+
+  /** Revert one commit. */
+  async revert(ctx, body, signal) {
+    return revertCommitOp(ctx, body, signal)
+  },
+
+  /** Reset HEAD to a commit; hard reset needs confirmation. */
+  async reset(ctx, body, signal) {
+    return resetTo(ctx, body, signal)
   },
 
   // ── A1: repository registry ─────────────────────────────────────────────

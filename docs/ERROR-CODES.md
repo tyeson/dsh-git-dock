@@ -60,7 +60,21 @@
 |---|---|---|---|
 | `branch-exists` | 409 | 分支已存在 | 换名 |
 | `invalid-name` | 400 | 分支名不合法 | 使用合法名称 |
-| `unknown-branch` | 404 | 分支不存在 | 刷新分支列表 |
+| `unknown-ref` | 404 | 分支不存在 | 刷新分支列表 |
+| `current-branch` | 409 | 不能删除当前检出的分支 | 先切换分支 |
+| `branch-not-merged` | 409 | 分支有未合并提交，需要强制删除 | 确认后 force |
+| `rebase-conflict` | 409 | 变基因冲突停止 | 解决冲突后继续/放弃 |
+| `cherry-pick-conflict` | 409 | 拣选因冲突停止 | 解决冲突后继续/跳过/放弃 |
+| `revert-conflict` | 409 | 还原因冲突停止 | 解决冲突后继续/放弃 |
+| `sequence-failed` | 409 | 继续操作序列失败 | 查看 details.detail |
+| `no-operation` | 409 | 没有进行中的操作序列 | 无需继续 |
+| `tag-exists` | 409 | 标签已存在 | 换名或先删除 |
+| `unknown-tag` | 404 | 标签不存在 | 刷新标签列表 |
+| `stash-failed` | 409 | 储藏保存失败 | 查看 details.detail |
+| `stash-apply-failed` | 409 | 储藏应用失败（可能冲突） | 手动解决冲突 |
+| `confirm-required` | 409 | 危险操作需要二次确认 | 确认后重试 |
+| `reset-failed` | 409 | 重置失败 | 查看 details.detail |
+| `invalid-name` | 400 | 名称不合法（标签等） | 使用合法名称 |
 | `unknown-ref` | 404 | 起点引用不存在 | 检查引用名 |
 | `same-branch` | 400 | 目标就是当前分支 | 换目标 |
 | `no-base` | 409 | 无法解析对比基线 | 手动指定基线 |
