@@ -1356,6 +1356,77 @@ function commitModelRoute(ctx, session) {
   return null
 }
 
+/**
+ * List provider/model routes with their reasoning efforts, plus the session's
+ * current choice, so the review tab offers the same picker as the composer.
+ */
+async function listModelOptions(ctx, body) {
+  const llm = ctx.get('llm')
+  if (llm === undefined || llm === null || typeof llm.listProviders !== 'function') {
+    throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
+  }
+  const providers = await Promise.resolve(llm.listProviders())
+  const entries = []
+  for (const providerInfo of Array.isArray(providers) ? providers : []) {
+    const providerCandidates = providerInfo !== null && typeof providerInfo === 'object'
+      ? [providerInfo.provider, providerInfo.id, providerInfo.route, providerInfo.name]
+      : [providerInfo]
+    const provider = providerCandidates.find((value) => typeof value === 'string' && value !== '')
+    if (provider === undefined) continue
+    const providerLabel = providerInfo !== null && typeof providerInfo === 'object' && typeof providerInfo.name === 'string' && providerInfo.name !== ''
+      ? providerInfo.name
+      : provider
+    let models = []
+    try {
+      models = await Promise.resolve(llm.listModels(provider))
+    } catch {
+      models = []
+    }
+    const mapped = []
+    for (const modelInfo of Array.isArray(models) ? models : []) {
+      const modelCandidates = modelInfo !== null && typeof modelInfo === 'object'
+        ? [modelInfo.id, modelInfo.model, modelInfo.name]
+        : [modelInfo]
+      const model = modelCandidates.find((value) => typeof value === 'string' && value !== '')
+      if (model === undefined) continue
+      const modelLabel = modelInfo !== null && typeof modelInfo === 'object' && typeof modelInfo.name === 'string' && modelInfo.name !== ''
+        ? modelInfo.name
+        : model
+      const efforts = []
+      const rawEfforts = modelInfo !== null && typeof modelInfo === 'object'
+        && modelInfo.reasoning !== null && modelInfo.reasoning !== undefined
+        ? modelInfo.reasoning.efforts
+        : undefined
+      for (const effort of Array.isArray(rawEfforts) ? rawEfforts : []) {
+        const id = typeof effort === 'string' ? effort : effort !== null && typeof effort === 'object' ? effort.id : undefined
+        if (typeof id !== 'string' || id === '') continue
+        const name = effort !== null && typeof effort === 'object' && typeof effort.name === 'string' && effort.name !== '' ? effort.name : id
+        efforts.push({ id, name })
+      }
+      mapped.push({ model, name: modelLabel, efforts })
+    }
+    entries.push({ provider, name: providerLabel, models: mapped })
+  }
+  let current = null
+  try {
+    const { session } = resolveSessionCwd(ctx, body.sessionId)
+    const route = commitModelRoute(ctx, session)
+    let effort = null
+    try {
+      const context = session.requestContext()
+      if (context !== null && context !== undefined && typeof context.reasoningEffort === 'string' && context.reasoningEffort !== '') {
+        effort = context.reasoningEffort
+      }
+    } catch {
+      // No request yet.
+    }
+    if (route !== null) current = { provider: route.provider, model: route.model, reasoningEffort: effort }
+  } catch {
+    // Session lookup is optional for this read-only listing.
+  }
+  return { providers: entries, current }
+}
+
 /** The built-in convention used when the repository declares nothing stricter. */
 const DEFAULT_COMMIT_CONVENTION = Object.freeze({
   format: 'type(scope): 中文描述',
@@ -1750,11 +1821,12 @@ function validateCommitMessage(message, profile) {
 }
 
 /** One streamed model call producing the cleaned message. */
-async function streamCommitMessage(llm, route, system, prompt, signal, sessionId) {
+async function streamCommitMessage(llm, route, system, prompt, signal, sessionId, reasoningEffort) {
   let output = ''
   const stream = llm.stream({
     provider: route.provider,
     model: route.model,
+    ...(typeof reasoningEffort === 'string' && reasoningEffort !== '' ? { reasoningEffort } : {}),
     system,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     maxTokens: 300,
@@ -1798,20 +1870,28 @@ async function suggestCommitMessage(ctx, body, signal) {
     : staged
   if (raw.trim() === '') throw new ApiError('nothing-staged', 'there is no diff to summarize', 409)
   const diff = raw.length > 16_000 ? `${raw.slice(0, 16_000)}\n… (truncated)` : raw
-  const route = commitModelRoute(ctx, session)
+  const requested = body !== null && typeof body === 'object' ? body : {}
+  const explicitRoute = typeof requested.provider === 'string' && requested.provider !== ''
+    && typeof requested.model === 'string' && requested.model !== ''
+    ? { provider: requested.provider, model: requested.model }
+    : null
+  const route = explicitRoute ?? commitModelRoute(ctx, session)
   if (route === null) throw new ApiError('llm-unavailable', 'no model is selected for this session', 503)
+  const reasoningEffort = typeof requested.reasoningEffort === 'string' && requested.reasoningEffort !== ''
+    ? requested.reasoningEffort
+    : null
 
   const conventions = await detectCommitConventions(state.repoRoot, signal)
   const language = conventions.language ?? (typeof body.language === 'string' && body.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
   const system = 'You write Git commit messages for the repository below. Reply with ONE line only, no quotes, '
     + 'no code fences, no trailing explanation.\n\n' + conventionRules(Object.assign({}, conventions, { language }))
   const prompt = `Changed files: ${state.changes.changed}.\n\nDiff:\n${diff}`
-  let message = await streamCommitMessage(llm, route, system, prompt, signal, body.sessionId)
+  let message = await streamCommitMessage(llm, route, system, prompt, signal, body.sessionId, reasoningEffort)
   if (message === '') throw new ApiError('llm-failed', 'the model returned an empty message', 502)
   let check = validateCommitMessage(message, conventions)
   if (!check.ok) {
     const correction = `${system}\n\nThe previous draft "${message}" violated the conventions:\n- ${check.problems.join('\n- ')}\nReturn a corrected single-line message that satisfies every rule.`
-    message = await streamCommitMessage(llm, route, correction, prompt, signal, body.sessionId)
+    message = await streamCommitMessage(llm, route, correction, prompt, signal, body.sessionId, reasoningEffort)
     check = validateCommitMessage(message, conventions)
     if (!check.ok) {
       const fallbackLines = message.split('\n')
@@ -2210,6 +2290,11 @@ const API = {
   /** Draft a commit message with the session's current model. */
   async commitMessage(ctx, body, signal) {
     return suggestCommitMessage(ctx, body, signal)
+  },
+
+  /** Provider/model routes (with reasoning efforts) for the commit-message picker. */
+  async modelOptions(ctx, body) {
+    return listModelOptions(ctx, body)
   },
 
   /** The effective commit convention plus the saved override. */

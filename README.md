@@ -13,7 +13,8 @@ Repository: <https://github.com/tyeson/dsh-git-dock>
 > comparisons; staging, discard, commit/amend and model-drafted commit messages;
 > fetch/push/sync; merge with conflict handling (one click asks the live model to
 > resolve and stage the conflicts; commit and push stay manual); and the
-> `git_branch` tool.
+> `git_branch` tool. Commit-message drafting has its own model/effort picker
+> (defaults to the conversation's choice, remembers the last one).
 
 ## Install
 

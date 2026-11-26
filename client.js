@@ -159,6 +159,13 @@ window.__ModuleLoader__.load({
         'commit.aiBusy': '生成中…',
         'commit.aiHint': '优先使用已暂存的 diff；没有暂存时使用工作区改动，发给当前会话模型',
         'commit.nothingToDraft': '没有可生成提交信息的改动（先修改或暂存文件）',
+        'commit.modelTitle': '提交信息模型',
+        'commit.modelHint': '选择生成提交信息使用的模型与推理等级',
+        'commit.modelFollow': '跟随当前会话',
+        'commit.effort': '推理等级',
+        'commit.effortAuto': '默认',
+        'commit.modelBusy': '加载模型…',
+        'commit.modelUnavailable': '无法读取模型列表',
         'commit.conventionHint': '已按仓库规范生成：{summary}',
         'commit.charCount': '{n}/{max}',
         'commit.config': '提交规范',
@@ -364,6 +371,13 @@ window.__ModuleLoader__.load({
         'commit.aiBusy': 'Drafting…',
         'commit.aiHint': 'Uses the staged diff, or the working-tree diff when nothing is staged',
         'commit.nothingToDraft': 'There are no changes to draft a message from (edit or stage files first)',
+        'commit.modelTitle': 'Commit message model',
+        'commit.modelHint': 'Pick the model and reasoning effort used to draft commit messages',
+        'commit.modelFollow': 'Follow this conversation',
+        'commit.effort': 'Reasoning effort',
+        'commit.effortAuto': 'Default',
+        'commit.modelBusy': 'Loading models…',
+        'commit.modelUnavailable': 'Could not read the model list',
         'commit.conventionHint': 'Drafted from the repository convention: {summary}',
         'commit.charCount': '{n}/{max}',
         'commit.config': 'Convention',
@@ -964,6 +978,124 @@ window.__ModuleLoader__.load({
       if (typeof select === 'function') select(name)
     }
 
+    // ── Commit-message model picker store ────────────────────────────────────
+
+    const COMMIT_MODEL_KEY = 'dsh-git-dock:commit-model'
+
+    /** Read the last picked commit-message model (persisted across openings). */
+    function readStoredModelChoice() {
+      try {
+        if (typeof localStorage === 'undefined') return null
+        const raw = localStorage.getItem(COMMIT_MODEL_KEY)
+        if (raw === null) return null
+        const value = JSON.parse(raw)
+        if (value === null || typeof value !== 'object') return null
+        const provider = typeof value.provider === 'string' && value.provider !== '' ? value.provider : null
+        const model = typeof value.model === 'string' && value.model !== '' ? value.model : null
+        if (provider === null || model === null) return null
+        const reasoningEffort = typeof value.reasoningEffort === 'string' && value.reasoningEffort !== ''
+          ? value.reasoningEffort
+          : null
+        return { provider, model, reasoningEffort }
+      } catch {
+        return null
+      }
+    }
+
+    /** Persist (or clear, when following the conversation again) that choice. */
+    function writeStoredModelChoice(choice) {
+      try {
+        if (typeof localStorage === 'undefined') return
+        if (choice === null) localStorage.removeItem(COMMIT_MODEL_KEY)
+        else localStorage.setItem(COMMIT_MODEL_KEY, JSON.stringify(choice))
+      } catch {
+        // Storage can be unavailable; the choice still applies to this tab.
+      }
+    }
+
+    let modelPicker = {
+      open: false,
+      anchor: null,
+      options: null,
+      choice: null,
+      status: 'idle',
+      error: null,
+      onApply: null,
+    }
+
+    const modelPickerListeners = new Set()
+
+    function getModelState() {
+      return modelPicker
+    }
+
+    function subscribeModel(listener) {
+      modelPickerListeners.add(listener)
+      return () => modelPickerListeners.delete(listener)
+    }
+
+    function setModelState(patch) {
+      modelPicker = Object.assign({}, modelPicker, patch)
+      for (const listener of modelPickerListeners) {
+        try {
+          listener()
+        } catch {
+          // A broken subscriber must not break the others.
+        }
+      }
+    }
+
+    function useModelStore() {
+      if (typeof React.useSyncExternalStore === 'function') {
+        return React.useSyncExternalStore(subscribeModel, getModelState)
+      }
+      const [, force] = React.useState(0)
+      React.useEffect(() => subscribeModel(() => force((value) => value + 1)), [])
+      return modelPicker
+    }
+
+    /** Open the model/effort dropdown above the commit bar. */
+    function openModelPicker(element, options, choice, onApply) {
+      closeMergePicker()
+      closeBasePicker()
+      closePanel(false)
+      const rect = element.getBoundingClientRect()
+      const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
+      setModelState({
+        open: true,
+        anchor: {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          placement: rect.top > viewportHeight * 0.5 ? 'above' : 'below',
+        },
+        options,
+        choice,
+        status: options === null ? 'loading' : 'ready',
+        error: null,
+        onApply,
+      })
+    }
+
+    function closeModelPicker() {
+      setModelState({ open: false, anchor: null, options: null, onApply: null, error: null, status: 'idle' })
+    }
+
+    /** Apply a choice (null means "follow the conversation") and close. */
+    function applyModelChoice(choice) {
+      const apply = modelPicker.onApply
+      closeModelPicker()
+      if (typeof apply === 'function') apply(choice)
+    }
+
+    /** Decide with one click: keep the panel open for the effort step. */
+    function pickModelInPanel(choice) {
+      setModelState({ choice })
+      const apply = modelPicker.onApply
+      if (typeof apply === 'function') apply(choice)
+    }
+
     /** Open the panel anchored at the chip element. */
     function openPanel(sessionId, element) {
       // The floating panels are mutually exclusive.
@@ -1211,6 +1343,7 @@ window.__ModuleLoader__.load({
         '.gdt-tab[data-active="true"]{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-link);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.10)}',
         '.gdt-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
         '.gdt-caret{font-size:10px;opacity:.7;margin-left:2px}',
+        '.gdt-model-name{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.gdt-summary{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}',
         '.gdt-spacer{flex:1}',
         '.gdt-btn{appearance:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}',
@@ -2103,6 +2236,166 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dgd-body' }, body))
     }
 
+    // ── Commit-message model picker overlay ────────────────────────────────
+
+    function ModelPicker() {
+      useLang()
+      const snapshot = useModelStore()
+      const panelRef = React.useRef(null)
+      React.useEffect(() => {
+        ensureStyle()
+      }, [])
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        const onPointerDown = (event) => {
+          const node = panelRef.current
+          if (node !== null && node.contains(event.target)) return
+          const target = event.target
+          if (target !== null && typeof target.closest === 'function'
+            && (target.closest(`[${CHIP_ATTR}]`) !== null
+              || target.closest('[data-dsh-git-dock-merge]') !== null
+              || target.closest('[data-dsh-git-dock-base]') !== null
+              || target.closest('[data-dsh-git-dock-model]') !== null)) return
+          closeModelPicker()
+        }
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return
+          event.stopPropagation()
+          closeModelPicker()
+        }
+        const onResize = () => closeModelPicker()
+        document.addEventListener('mousedown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        window.addEventListener('resize', onResize)
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+          window.removeEventListener('resize', onResize)
+        }
+      }, [snapshot.open])
+
+      if (snapshot.open !== true || snapshot.anchor === null) return null
+      const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth
+      const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
+      const width = Math.max(260, Math.min(380, viewportWidth - 16))
+      const left = Math.max(8, Math.min(snapshot.anchor.left, viewportWidth - width - 8))
+      const below = snapshot.anchor.placement === 'below'
+      const panelTop = Math.max(8, snapshot.anchor.bottom + 8)
+      const bottom = Math.max(8, viewportHeight - snapshot.anchor.top + 8)
+      const maxHeight = below
+        ? Math.min(460, Math.max(220, viewportHeight - snapshot.anchor.bottom - 24))
+        : Math.min(460, Math.max(220, snapshot.anchor.top - 24))
+
+      const options = snapshot.options
+      const choice = snapshot.choice
+      const flat = []
+      if (options !== null) {
+        for (const provider of options.providers ?? []) {
+          for (const model of provider.models ?? []) {
+            flat.push({
+              provider: provider.provider,
+              providerName: provider.name ?? provider.provider,
+              model: model.model,
+              name: model.name ?? model.model,
+              efforts: model.efforts ?? [],
+            })
+          }
+        }
+      }
+      const selected = choice === null
+        ? null
+        : flat.find((entry) => entry.provider === choice.provider && entry.model === choice.model) ?? null
+      const current = options === null || options.current === null || options.current === undefined
+        ? null
+        : flat.find((entry) => entry.provider === options.current.provider && entry.model === options.current.model) ?? null
+
+      const modelRow = (entry) => h('div', {
+        key: `${entry.provider}/${entry.model}`,
+        className: 'dgd-row',
+        role: 'button',
+        tabIndex: 0,
+        'data-current': selected !== null && selected.provider === entry.provider && selected.model === entry.model ? 'true' : 'false',
+        onClick: () => {
+          const nextEffort = selected !== null && selected.provider === entry.provider && selected.model === entry.model
+            ? (choice === null ? null : choice.reasoningEffort)
+            : null
+          pickModelInPanel({ provider: entry.provider, model: entry.model, reasoningEffort: nextEffort })
+        },
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          pickModelInPanel({ provider: entry.provider, model: entry.model, reasoningEffort: null })
+        },
+      },
+      h('span', { className: 'dgd-row-icon' }, selected !== null && selected.provider === entry.provider && selected.model === entry.model ? h(CheckIcon, null) : null),
+      h('span', { className: 'dgd-row-main' },
+        h('span', { className: 'dgd-row-name' }, entry.name),
+        h('span', { className: 'dgd-row-sub' }, entry.providerName)))
+
+      const effortRow = (id, label) => h('div', {
+        key: id === null ? 'effort-auto' : `effort-${id}`,
+        className: 'dgd-row',
+        role: 'button',
+        tabIndex: 0,
+        'data-current': choice !== null && (choice.reasoningEffort ?? null) === id ? 'true' : 'false',
+        onClick: () => applyModelChoice(Object.assign({}, choice ?? { provider: selected.provider, model: selected.model }, { reasoningEffort: id })),
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          applyModelChoice(Object.assign({}, choice ?? { provider: selected.provider, model: selected.model }, { reasoningEffort: id }))
+        },
+      },
+      h('span', { className: 'dgd-row-icon' }, choice !== null && (choice.reasoningEffort ?? null) === id ? h(CheckIcon, null) : null),
+      h('span', { className: 'dgd-row-main' }, h('span', { className: 'dgd-row-name' }, label)))
+
+      const body = options === null
+        ? h('div', { className: 'dgd-empty' }, t('commit.modelBusy'))
+        : flat.length === 0
+          ? h('div', { className: 'dgd-empty' }, t('commit.modelUnavailable'))
+          : h('div', null,
+            h('div', {
+              key: 'follow',
+              className: 'dgd-row',
+              role: 'button',
+              tabIndex: 0,
+              'data-current': choice === null ? 'true' : 'false',
+              onClick: () => applyModelChoice(null),
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                applyModelChoice(null)
+              },
+            },
+            h('span', { className: 'dgd-row-icon' }, choice === null ? h(CheckIcon, null) : null),
+            h('span', { className: 'dgd-row-main' },
+              h('span', { className: 'dgd-row-name' }, t('commit.modelFollow')),
+              h('span', { className: 'dgd-row-sub' }, current === null ? (options.current === null || options.current === undefined ? '' : options.current.model) : current.name))),
+            h('div', { className: 'dgd-section' }, t('commit.modelTitle')),
+            ...flat.map(modelRow),
+            selected !== null && (selected.efforts.length > 0 || choice !== null)
+              ? h('div', null,
+                h('div', { className: 'dgd-section' }, `${t('commit.effort')} · ${selected.name}`),
+                effortRow(null, t('commit.effortAuto')),
+                ...selected.efforts.map((effort) => effortRow(effort.id, effort.name)))
+              : null)
+
+      return h('div', {
+        ref: panelRef,
+        className: 'dgd-panel',
+        style: below
+          ? { left: `${left}px`, top: `${panelTop}px`, width: `${width}px`, maxHeight: `${maxHeight}px` }
+          : { left: `${left}px`, bottom: `${bottom}px`, width: `${width}px`, maxHeight: `${maxHeight}px` },
+        role: 'dialog',
+        'aria-label': t('commit.modelTitle'),
+      },
+      h('div', { className: 'dgd-head' },
+        h('span', { className: 'dgd-head-icon' }, h(BranchIcon, { size: 15 })),
+        h('div', { className: 'dgd-head-text' },
+          h('span', { className: 'dgd-head-title' }, t('commit.modelTitle')),
+          h('span', { className: 'dgd-head-sub' }, t('commit.modelHint')))),
+      h('div', { className: 'dgd-body' }, body))
+    }
+
     // ── Changes tab (sidebar.right.pane.tab) ──────────────────────────────
 
     /** Open this plugin's review tab in the session's right sidebar. */
@@ -2216,6 +2509,8 @@ window.__ModuleLoader__.load({
       const [amend, setAmend] = React.useState(false)
       const [commitBusy, setCommitBusy] = React.useState(false)
       const [aiBusy, setAiBusy] = React.useState(false)
+      const [modelOptions, setModelOptions] = React.useState(null)
+      const [modelChoice, setModelChoice] = React.useState(readStoredModelChoice)
       const [commitHint, setCommitHint] = React.useState(null)
       const [commitLimit, setCommitLimit] = React.useState(500)
       const [showConfig, setShowConfig] = React.useState(false)
@@ -2229,6 +2524,34 @@ window.__ModuleLoader__.load({
       const [mergeBusy, setMergeBusy] = React.useState(null)
       const [mergeError, setMergeError] = React.useState(null)
       const [assistBusy, setAssistBusy] = React.useState(false)
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('modelOptions', { sessionId })
+            if (!cancelled) {
+              setModelOptions(value)
+              // A remembered route that no longer exists falls back to the conversation.
+              setModelChoice((previous) => {
+                if (previous === null) return previous
+                const exists = (value.providers ?? []).some((provider) => provider.provider === previous.provider
+                  && (provider.models ?? []).some((model) => model.model === previous.model))
+                if (exists) return previous
+                writeStoredModelChoice(null)
+                return null
+              })
+            }
+          } catch (thrown) {
+            if (!cancelled) {
+              setModelOptions({ providers: [], current: null, lastError: { code: thrown.code, message: thrown.message } })
+            }
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId])
       const requestRef = React.useRef(0)
       const dataRef = React.useRef(null)
       const [reloadTick, setReloadTick] = React.useState(0)
@@ -2476,6 +2799,34 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const modelSelectionLabel = (() => {
+        const flat = []
+        for (const provider of modelOptions?.providers ?? []) {
+          for (const model of provider.models ?? []) {
+            flat.push({ provider: provider.provider, name: model.name ?? model.model, model: model.model })
+          }
+        }
+        const current = modelOptions?.current ?? null
+        const active = modelChoice !== null
+          ? modelChoice
+          : current === null
+            ? null
+            : { provider: current.provider, model: current.model, reasoningEffort: current.reasoningEffort }
+        if (active === null) return t('commit.modelBusy')
+        const match = flat.find((entry) => entry.provider === active.provider && entry.model === active.model)
+        const name = match === undefined ? active.model : match.name
+        const effort = active.reasoningEffort === null || active.reasoningEffort === undefined ? '' : ` · ${active.reasoningEffort}`
+        return `${name}${effort}`
+      })()
+
+      const openCommitModelPicker = (event) => {
+        if (modelOptions === null) return
+        openModelPicker(event.currentTarget, modelOptions, modelChoice, (next) => {
+          setModelChoice(next)
+          writeStoredModelChoice(next)
+        })
+      }
+
       const draftMessage = async () => {
         if (aiBusy) return
         const currentFiles = dataRef.current === null ? [] : dataRef.current.files ?? []
@@ -2486,7 +2837,17 @@ window.__ModuleLoader__.load({
         setAiBusy(true)
         setActionError(null)
         try {
-          const value = await callApi('commitMessage', { sessionId, language: currentLang() })
+          const value = await callApi('commitMessage', {
+            sessionId,
+            language: currentLang(),
+            ...(modelChoice === null
+              ? {}
+              : {
+                provider: modelChoice.provider,
+                model: modelChoice.model,
+                ...(modelChoice.reasoningEffort === null ? {} : { reasoningEffort: modelChoice.reasoningEffort }),
+              }),
+          })
           setMessage(value.message)
           setCommitHint(value.conventions === undefined || value.conventions === null ? null : value.conventions.summary ?? null)
           if (value.conventions !== undefined && value.conventions !== null && typeof value.conventions.totalMaxLength === 'number') {
@@ -2830,6 +3191,16 @@ window.__ModuleLoader__.load({
           h('div', { className: 'gct-commit-row' },
             h('button', {
               type: 'button',
+              className: 'gdt-btn gdt-branch-btn gdt-model-btn',
+              'data-dsh-git-dock-model': '1',
+              title: t('commit.modelHint'),
+              disabled: commitBusy || modelOptions === null,
+              onClick: openCommitModelPicker,
+            },
+            h('span', { className: 'gdt-model-name' }, modelSelectionLabel),
+            h('span', { className: 'gdt-caret' }, '▾')),
+            h('button', {
+              type: 'button',
               className: 'gdt-btn',
               disabled: aiBusy || commitBusy,
               title: t('commit.aiHint'),
@@ -3025,6 +3396,12 @@ window.__ModuleLoader__.load({
           id: 'git-dock-base',
           order: 102,
         }, BasePicker))
+
+        slots.inject('shell.overlay', () => slots.register({
+          name: 'shell.overlay',
+          id: 'git-dock-model',
+          order: 103,
+        }, ModelPicker))
 
         // The review surface is a native right-sidebar tab type. The type and
         // its body are two registrations under the SAME id, and the guide entry

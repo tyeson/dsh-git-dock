@@ -63,8 +63,11 @@ switching and creating branches.
   becomes **Resolve conflicts**: one click wakes the live session model with the
   conflict list and asks it to merge both sides and `git add` each resolved file,
   explicitly forbidding commit, abort and push. Completing the merge and pushing
-  stay manual. Switching continues to record `HEAD` under `refs/dsh/backup/…`
-  (20 newest kept per repository).
+  stay manual. Commit-message drafting has its own model and reasoning-effort
+  picker in the commit bar: it defaults to the conversation's current choice and
+  remembers the last pick in `localStorage`, and the chosen route is sent with the
+  `commitMessage` request. Switching continues to record `HEAD` under
+  `refs/dsh/backup/…` (20 newest kept per repository).
 - **Guards** — switching and creating are refused while a merge, rebase,
   cherry-pick, revert, or bisect is in progress; while the session's turn is
   open both require an explicit second confirmation; a stale panel (the

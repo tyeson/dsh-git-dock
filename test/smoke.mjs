@@ -76,12 +76,33 @@ function makeContext(cwd, state) {
   }
   const llm = {
     script: [],
-    stream() {
+    calls: [],
+    stream(options) {
+      llm.calls.push(options)
       const text = llm.script.length > 0 ? llm.script.shift() : 'feat(core): 新增测试功能'
       return (async function* chunks() {
         yield { type: 'text-delta', index: 0, text }
         yield { type: 'finish', reason: { kind: 'stop' } }
       })()
+    },
+    listProviders() {
+      return [
+        {
+          provider: 'mock',
+          name: 'Mock',
+          models: undefined,
+        },
+      ]
+    },
+    listModels(provider) {
+      if (provider !== 'mock') return []
+      return [
+        {
+          id: 'mock',
+          name: 'Mock Chat',
+          reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] },
+        },
+      ]
     },
   }
   const ctx = {
@@ -384,6 +405,21 @@ check('AI reports the session model', suggestion.provider === 'mock' && suggesti
 check('the default convention requires a scope', suggestion.conventions.scopeRequired === true, suggestion.conventions)
 check('the default convention lists the standard types', suggestion.conventions.types.includes('refactor') && suggestion.conventions.types.includes('ci'), suggestion.conventions.types)
 check('the default convention caps the total message', suggestion.conventions.totalMaxLength === 500, suggestion.conventions.totalMaxLength)
+const modelOptions = unwrap(await callApi(handler, 'modelOptions', { sessionId: SESSION }))
+check('model options list the provider', modelOptions.providers.some((provider) => provider.provider === 'mock'), modelOptions.providers)
+check('model options carry reasoning efforts', modelOptions.providers[0].models[0].efforts.length === 2, modelOptions.providers[0].models[0])
+check('model options expose the session route', modelOptions.current !== null && modelOptions.current.provider === 'mock', modelOptions.current)
+const chosen = unwrap(await callApi(handler, 'commitMessage', {
+  sessionId: SESSION,
+  language: 'en',
+  provider: 'mock',
+  model: 'mock',
+  reasoningEffort: 'high',
+}))
+check('the chosen model drafts the message', typeof chosen.message === 'string' && chosen.message.length > 0, chosen)
+const chosenCall = llm.calls[llm.calls.length - 1]
+check('the request carries the chosen model', chosenCall.provider === 'mock' && chosenCall.model === 'mock', chosenCall)
+check('the request carries the chosen reasoning effort', chosenCall.reasoningEffort === 'high', chosenCall.reasoningEffort)
 const longCommit = await callApi(handler, 'commit', { sessionId: SESSION, message: `fix(core): ${'长'.repeat(600)}` })
 check('commit rejects an over-long message', longCommit.status === 400 && longCommit.body.error.code === 'message-too-long', longCommit.body)
 const multiLineCommit = unwrap(await callApi(handler, 'commit', {
