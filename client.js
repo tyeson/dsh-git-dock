@@ -191,6 +191,7 @@ window.__ModuleLoader__.load({
         'discard.confirm': '丢弃 {n} 个文件的改动？已跟踪的改动会存进 stash，仍可恢复。',
         'discard.confirmYes': '确认丢弃',
         'sync.fetch': '获取',
+        'sync.pull': '拉取',
         'sync.push': '推送',
         'sync.sync': '同步',
         'sync.commitPush': '提交并推送',
@@ -200,6 +201,46 @@ window.__ModuleLoader__.load({
         'sync.fetched': '已获取远端',
         'sync.pushed': '已推送',
         'sync.synced': '已同步',
+        'sync.phase.pull': '拉取中…',
+        'sync.phase.push': '推送中…',
+        'sync.pullConflictTitle': '拉取冲突：合并上游时产生冲突',
+        'sync.pullConflictHint': '先解决下列冲突文件；全部解决后会继续未完成的推送，也可在合并完成后点「重试推送」。',
+        'sync.pushConflictTitle': '推送冲突：远端拒绝（远端有新提交）',
+        'sync.pushConflictHint': '请先获取并合并远端改动，解决冲突后再重试推送。',
+        'sync.pushRejected': '远端拒绝推送：{message}',
+        'sync.blockedConflicts': '仍有未解决的冲突，已阻止推送',
+        'sync.blockedOperation': '有进行中的操作，已阻止推送',
+        'sync.copyConflicts': '复制冲突列表',
+        'sync.copied': '已复制冲突文件列表',
+        'sync.copyFailed': '复制失败，请手动选择',
+        'sync.later': '稍后处理',
+        'sync.retryPush': '重试推送',
+        'sync.details': '同步详情',
+        'sync.detailsTitle': '最近同步记录',
+        'sync.noLog': '还没有同步记录',
+        'sync.badgeHint': '{n} 个未解决冲突，点击查看',
+        'sync.openFile': '打开',
+        'sync.typeLabel': '冲突类型',
+        'sync.content': '内容冲突',
+        'sync.bothAdded': '双方新增',
+        'sync.bothDeleted': '双方删除',
+        'sync.added': '单方新增',
+        'sync.deletedModified': '删除/修改',
+        'sync.other': '其他冲突',
+        'sync.filterAll': '全部',
+        'sync.sortPath': '按路径',
+        'sync.sortType': '按类型',
+        'sync.state.pushed': '已推送',
+        'sync.state.up-to-date': '无变化',
+        'sync.state.fast-forward': '已快进',
+        'sync.state.merged': '已合并',
+        'sync.state.conflict': '冲突',
+        'sync.state.blocked': '被阻止',
+        'sync.state.rejected': '被拒绝',
+        'sync.state.fetch-error': '获取失败',
+        'sync.state.error': '失败',
+        'sync.state.no-upstream': '无上游',
+        'sync.state.skipped': '未执行',
         'err.message-required': '请填写提交信息',
         'err.message-too-long': '提交信息超过长度上限',
         'err.nothing-staged': '没有已暂存的改动',
@@ -403,6 +444,7 @@ window.__ModuleLoader__.load({
         'discard.confirm': 'Discard changes in {n} file(s)? Tracked changes are stashed and can be recovered.',
         'discard.confirmYes': 'Discard',
         'sync.fetch': 'Fetch',
+        'sync.pull': 'Pull',
         'sync.push': 'Push',
         'sync.sync': 'Sync',
         'sync.commitPush': 'Commit and push',
@@ -412,6 +454,46 @@ window.__ModuleLoader__.load({
         'sync.fetched': 'Fetched remotes',
         'sync.pushed': 'Pushed',
         'sync.synced': 'Synced',
+        'sync.phase.pull': 'Pulling…',
+        'sync.phase.push': 'Pushing…',
+        'sync.pullConflictTitle': 'Pull conflict: merging upstream produced conflicts',
+        'sync.pullConflictHint': 'Resolve the files below; the pending push continues automatically once they are cleared, or retry the push after completing the merge.',
+        'sync.pushConflictTitle': 'Push conflict: the remote rejected the push (new commits upstream)',
+        'sync.pushConflictHint': 'Fetch and merge the remote changes, resolve the conflicts, then retry the push.',
+        'sync.pushRejected': 'The remote rejected the push: {message}',
+        'sync.blockedConflicts': 'Push blocked: conflicts are still unresolved',
+        'sync.blockedOperation': 'Push blocked: an operation is still in progress',
+        'sync.copyConflicts': 'Copy conflict list',
+        'sync.copied': 'Conflict file list copied',
+        'sync.copyFailed': 'Copy failed; select the text manually',
+        'sync.later': 'Later',
+        'sync.retryPush': 'Retry push',
+        'sync.details': 'Sync details',
+        'sync.detailsTitle': 'Recent sync results',
+        'sync.noLog': 'No sync has run yet',
+        'sync.badgeHint': '{n} unresolved conflict(s); click to view',
+        'sync.openFile': 'Open',
+        'sync.typeLabel': 'Conflict type',
+        'sync.content': 'Content conflict',
+        'sync.bothAdded': 'Both added',
+        'sync.bothDeleted': 'Both deleted',
+        'sync.added': 'Added on one side',
+        'sync.deletedModified': 'Deleted/modified',
+        'sync.other': 'Other conflict',
+        'sync.filterAll': 'All',
+        'sync.sortPath': 'By path',
+        'sync.sortType': 'By type',
+        'sync.state.pushed': 'Pushed',
+        'sync.state.up-to-date': 'Up to date',
+        'sync.state.fast-forward': 'Fast-forwarded',
+        'sync.state.merged': 'Merged',
+        'sync.state.conflict': 'Conflict',
+        'sync.state.blocked': 'Blocked',
+        'sync.state.rejected': 'Rejected',
+        'sync.state.fetch-error': 'Fetch failed',
+        'sync.state.error': 'Failed',
+        'sync.state.no-upstream': 'No upstream',
+        'sync.state.skipped': 'Skipped',
         'err.message-required': 'A commit message is required',
         'err.message-too-long': 'The commit message is over the length limit',
         'err.nothing-staged': 'No staged changes',
@@ -1347,6 +1429,11 @@ window.__ModuleLoader__.load({
         '.gdt-tab[data-active="true"]{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-link);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.10)}',
         '.gdt-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
         '.gdt-caret{font-size:10px;opacity:.7;margin-left:2px}',
+        '.gdt-link{appearance:none;background:none;border:0;padding:0;color:var(--dsw-alias-link);cursor:pointer;text-align:left;font:inherit;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.gdt-link:hover{text-decoration:underline}',
+        '.gdt-sync-banner{border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,8px);padding:8px 10px;display:flex;flex-direction:column;gap:6px}',
+        '.gdt-sync-title{font-weight:600;font-size:13px;line-height:18px}',
+        '.gdt-badge{appearance:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;border:0;background:var(--dsw-alias-state-warn-primary);color:#fff;font:inherit;font-size:11px;line-height:18px;cursor:pointer}',
         '.gdt-model-name{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.gdt-mp-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary)}',
         '.gdt-mp-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
@@ -2610,6 +2697,15 @@ window.__ModuleLoader__.load({
       const [mergeBusy, setMergeBusy] = React.useState(null)
       const [mergeError, setMergeError] = React.useState(null)
       const [assistBusy, setAssistBusy] = React.useState(false)
+      const [syncPhase, setSyncPhase] = React.useState(null)
+      const [syncReport, setSyncReport] = React.useState(null)
+      const [syncDismissed, setSyncDismissed] = React.useState(false)
+      const [syncPendingPush, setSyncPendingPush] = React.useState(false)
+      const [syncLog, setSyncLog] = React.useState(null)
+      const [syncLogOpen, setSyncLogOpen] = React.useState(false)
+      const [conflictFilter, setConflictFilter] = React.useState('all')
+      const [conflictSort, setConflictSort] = React.useState('path')
+      const autoPushRef = React.useRef(false)
       React.useEffect(() => {
         if (sessionId === undefined) return undefined
         let cancelled = false
@@ -2778,6 +2874,35 @@ window.__ModuleLoader__.load({
           cancelled = true
         }
       }, [sessionId, scope, baseSel, selected, reloadTick])
+
+      // Finish a sync whose push was interrupted by a merge conflict: once the
+      // conflict markers are gone and no operation remains, push automatically.
+      React.useEffect(() => {
+        if (syncPendingPush !== true || syncPhase !== null || autoPushRef.current) return
+        const repo = dataRef.current === null ? null : dataRef.current.repo
+        if (repo === null || repo === undefined) return
+        if ((repo.conflictPaths ?? []).length > 0 || repo.operation !== 'none') return
+        autoPushRef.current = true
+        setSyncPendingPush(false)
+        setSyncDismissed(false)
+        setSyncPhase('push')
+        void (async () => {
+          try {
+            const report = await callApi('syncPush', { sessionId })
+            setSyncReport((previous) => Object.assign({}, previous ?? {}, { push: report.push, at: report.at, branch: report.branch }))
+            void loadChanges()
+            notifyRepoChanged(sessionId)
+            const status = report.push === undefined ? 'error' : report.push.status
+            if (status === 'pushed') setNotice(t('sync.pushed'))
+            if (status === 'rejected' || status === 'blocked') setSyncPendingPush(true)
+          } catch (thrown) {
+            setActionError({ code: thrown.code, message: thrown.message })
+          } finally {
+            setSyncPhase(null)
+            autoPushRef.current = false
+          }
+        })()
+      }, [syncPendingPush, syncPhase, reloadTick])
 
       if (sessionId === undefined) return h('div', { className: 'gdt-empty' }, t('panel.noSession'))
 
@@ -3030,6 +3155,95 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const syncPhaseLabel = () => {
+        if (syncPhase === 'pull') return t('sync.phase.pull')
+        if (syncPhase === 'push') return t('sync.phase.push')
+        return t('sync.sync')
+      }
+
+      const runSync = async () => {
+        if (remoteBusy !== null || syncPhase !== null) return
+        autoPushRef.current = false
+        setSyncDismissed(false)
+        setSyncReport(null)
+        setSyncPendingPush(false)
+        setRemoteBusy('sync')
+        setSyncPhase('pull')
+        setActionError(null)
+        try {
+          if (message.trim() !== '' && (data === null || (data.repo?.changes?.staged ?? 0) > 0)) {
+            await callApi('commit', { sessionId, message, amend: false })
+            setMessage('')
+          }
+          const pullReport = await callApi('syncPull', { sessionId })
+          setSyncReport(pullReport)
+          void loadChanges()
+          notifyRepoChanged(sessionId)
+          const pullStatus = pullReport.pull === undefined ? 'error' : pullReport.pull.status
+          if (pullStatus !== 'up-to-date' && pullStatus !== 'fast-forward' && pullStatus !== 'merged') {
+            if (pullStatus === 'conflict') {
+              setSyncPendingPush(true)
+              setNotice(null)
+            } else if (pullStatus === 'blocked' || pullStatus === 'fetch-error' || pullStatus === 'error') {
+              setNotice(null)
+            }
+            return
+          }
+          setSyncPhase('push')
+          const pushReport = await callApi('syncPush', { sessionId })
+          setSyncReport((previous) => Object.assign({}, previous ?? {}, { push: pushReport.push, at: pushReport.at, branch: pushReport.branch }))
+          void loadChanges()
+          notifyRepoChanged(sessionId)
+          const pushStatus = pushReport.push === undefined ? 'error' : pushReport.push.status
+          if (pushStatus === 'rejected' || pushStatus === 'blocked') setSyncPendingPush(true)
+          else if (pushStatus === 'pushed') setNotice(t('sync.pushed'))
+          else setNotice(t('sync.synced'))
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setSyncPhase(null)
+          setRemoteBusy(null)
+        }
+      }
+
+      const retrySyncPush = async () => {
+        if (remoteBusy !== null || syncPhase !== null) return
+        setSyncDismissed(false)
+        setSyncPhase('push')
+        setActionError(null)
+        try {
+          const report = await callApi('syncPush', { sessionId })
+          setSyncReport((previous) => Object.assign({}, previous ?? {}, { push: report.push, at: report.at, branch: report.branch }))
+          void loadChanges()
+          notifyRepoChanged(sessionId)
+          const status = report.push === undefined ? 'error' : report.push.status
+          if (status === 'pushed') setNotice(t('sync.pushed'))
+          if (status === 'rejected' || status === 'blocked') setSyncPendingPush(true)
+          else setSyncPendingPush(false)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setSyncPhase(null)
+        }
+      }
+
+      const copyConflictList = async (paths) => {
+        try {
+          if (typeof navigator === 'undefined' || navigator.clipboard === undefined) throw new Error('no clipboard')
+          await navigator.clipboard.writeText(paths.join('\n'))
+          setNotice(t('sync.copied'))
+        } catch {
+          setNotice(t('sync.copyFailed'))
+        }
+      }
+
+      const openConflictFile = (path) => {
+        setScope('worktree')
+        setBaseSel(null)
+        setSelected({ path })
+        setSyncDismissed(false)
+      }
+
       const remoteAction = async (action) => {
         if (remoteBusy !== null) return
         setRemoteBusy(action)
@@ -3047,17 +3261,7 @@ window.__ModuleLoader__.load({
             void loadChanges()
             notifyRepoChanged(sessionId)
           } else {
-            if (message.trim() !== '' && (data === null || (data.repo?.changes?.staged ?? 0) > 0)) {
-              await callApi('commit', { sessionId, message, amend: false })
-              setMessage('')
-            }
-            await callApi('fetch', { sessionId })
-            await callApi('pull', { sessionId })
-            const fresh = await callApi('repo', { sessionId })
-            await callApi('push', { sessionId, setUpstream: fresh.repo.upstream === null || fresh.repo.upstream === undefined })
-            setNotice(t('sync.synced'))
-            void loadChanges()
-            notifyRepoChanged(sessionId)
+            await runSync()
           }
         } catch (thrown) {
           setActionError({ code: thrown.code, message: thrown.message })
@@ -3068,6 +3272,30 @@ window.__ModuleLoader__.load({
 
       const repoInfo = data === null ? null : data.repo
       const conflictPaths = repoInfo === null || repoInfo === undefined ? [] : repoInfo.conflictPaths ?? []
+      const conflictTypes = repoInfo === null || repoInfo === undefined
+        ? []
+        : repoInfo.conflictTypes !== undefined && repoInfo.conflictTypes.length > 0
+          ? repoInfo.conflictTypes
+          : conflictPaths.map((path) => ({ path, type: 'other', code: '' }))
+      const conflictTypeKeys = {
+        content: 'sync.content',
+        'both-added': 'sync.bothAdded',
+        'both-deleted': 'sync.bothDeleted',
+        added: 'sync.added',
+        'deleted-modified': 'sync.deletedModified',
+        other: 'sync.other',
+      }
+      const conflictTypeLabel = (type) => {
+        const key = conflictTypeKeys[type] ?? 'sync.other'
+        const label = t(key)
+        return label === key ? t('sync.other') : label
+      }
+      const conflictFilterTypes = ['all', 'content', 'both-added', 'both-deleted', 'added', 'deleted-modified', 'other']
+      const visibleConflicts = conflictTypes
+        .filter((item) => conflictFilter === 'all' || item.type === conflictFilter)
+        .sort((left, right) => (conflictSort === 'type'
+          ? left.type.localeCompare(right.type) || left.path.localeCompare(right.path)
+          : left.path.localeCompare(right.path)))
       const mergeInProgress = repoInfo !== null && repoInfo !== undefined && repoInfo.operation === 'merge'
       const hasConflicts = conflictPaths.length > 0
       const branchLabel = repoInfo === null || repoInfo === undefined
@@ -3351,6 +3579,25 @@ window.__ModuleLoader__.load({
           commitHint === null ? null : h('div', { className: 'gdt-summary', style: { fontSize: '11px' } }, t('commit.conventionHint', { summary: commitHint }))))
         : null
 
+      const syncStateLabel = (phase) => {
+        if (phase === null || phase === undefined) return t('sync.state.skipped')
+        const key = `sync.state.${phase.status}`
+        const label = t(key)
+        return label === key ? phase.status : label
+      }
+
+      const toggleSyncLog = async () => {
+        const next = !syncLogOpen
+        setSyncLogOpen(next)
+        if (!next) return
+        try {
+          const value = await callApi('syncLog', { sessionId })
+          setSyncLog(value.entries ?? [])
+        } catch {
+          setSyncLog([])
+        }
+      }
+
       const remoteBar = worktreeScope ? h('div', { className: 'gct-remote' },
         branchButton,
         h('span', { className: 'gdt-spacer' }),
@@ -3375,30 +3622,177 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('push') },
           remoteBusy === 'push' ? t('sync.busy') : t('sync.push')),
         h('button', { type: 'button', className: 'gdt-btn', disabled: remoteBusy !== null, onClick: () => void remoteAction('sync') },
-          remoteBusy === 'sync' ? t('sync.busy') : t('sync.sync'))) : null
+          syncPhase !== null ? syncPhaseLabel() : (remoteBusy === 'sync' ? t('sync.busy') : t('sync.sync'))),
+        hasConflicts && syncDismissed
+          ? h('button', {
+            type: 'button',
+            className: 'gdt-badge',
+            title: t('sync.badgeHint', { n: conflictPaths.length }),
+            onClick: () => {
+              setSyncDismissed(false)
+              setNotice(null)
+            },
+          }, String(conflictPaths.length))
+          : null,
+        h('button', {
+          type: 'button',
+          className: 'gdt-btn',
+          'data-active': syncLogOpen ? 'true' : 'false',
+          onClick: () => void toggleSyncLog(),
+        }, t('sync.details'))) : null
 
-      const conflictSection = repoInfo === null || repoInfo === undefined || repoInfo.operation !== 'merge' ? null : h('div', { className: 'gct-merge' },
-        h('div', { className: 'gct-config-title' }, t('merge.openTitle', { n: conflictPaths.length })),
-        conflictPaths.length === 0
-          ? h('div', { className: 'gdt-note' }, t('merge.noConflicts'))
-          : h('div', null, conflictPaths.map((path) => h('div', { key: path, className: 'gct-config-row' },
-            h('span', { className: 'gdt-path', title: path }, path),
-            h('button', {
-              type: 'button',
-              className: 'gdt-btn',
-              disabled: mergeBusy !== null,
-              onClick: () => void resolveConflict(path),
-            }, t('merge.rowResolve'))))),
+      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },
+        h('div', { className: 'gct-config-title' }, hasConflicts
+          ? t('merge.openTitle', { n: conflictTypes.length })
+          : t('merge.noConflicts')),
+        hasConflicts
+          ? h('div', null,
+            h('div', { className: 'gct-actions', style: { marginBottom: '6px' } },
+              conflictFilterTypes.map((type) => h('button', {
+                key: type,
+                type: 'button',
+                className: 'gdt-btn',
+                'data-active': conflictFilter === type ? 'true' : 'false',
+                onClick: () => setConflictFilter(type),
+              }, type === 'all' ? t('sync.filterAll') : conflictTypeLabel(type))),
+              h('span', { className: 'gdt-spacer' }),
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn',
+                title: t('sync.typeLabel'),
+                onClick: () => setConflictSort(conflictSort === 'path' ? 'type' : 'path'),
+              }, conflictSort === 'path' ? t('sync.sortPath') : t('sync.sortType'))),
+            visibleConflicts.length === 0
+              ? h('div', { className: 'gdt-note' }, t('panel.empty'))
+              : visibleConflicts.map((item) => h('div', { key: item.path, className: 'gct-config-row' },
+                h('button', {
+                  type: 'button',
+                  className: 'gdt-path gdt-link',
+                  title: item.path,
+                  onClick: () => openConflictFile(item.path),
+                }, item.path),
+                h('span', { className: 'gdt-summary' }, conflictTypeLabel(item.type)),
+                h('button', {
+                  type: 'button',
+                  className: 'gdt-btn',
+                  disabled: mergeBusy !== null,
+                  onClick: () => void resolveConflict(item.path),
+                }, t('merge.rowResolve')))))
+          : null,
         mergeError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(mergeError)),
         h('div', { className: 'gct-actions' },
-          h('button', { type: 'button', className: 'gdt-btn', disabled: mergeBusy !== null, onClick: () => void abortMergeNow() },
-            mergeBusy === 'abort' ? t('merge.aborting') : t('merge.abort')),
-          h('button', { type: 'button', className: 'gdt-btn', disabled: mergeBusy !== null || conflictPaths.length > 0, onClick: () => void completeMergeNow() },
-            mergeBusy === 'complete' ? t('merge.completing') : t('merge.complete'))))
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: conflictPaths.length === 0,
+            onClick: () => void copyConflictList(conflictPaths),
+          }, t('sync.copyConflicts')),
+          mergeInProgress
+            ? h('button', { type: 'button', className: 'gdt-btn', disabled: mergeBusy !== null, onClick: () => void abortMergeNow() },
+              mergeBusy === 'abort' ? t('merge.aborting') : t('merge.abort'))
+            : null,
+          mergeInProgress
+            ? h('button', { type: 'button', className: 'gdt-btn', disabled: mergeBusy !== null || conflictPaths.length > 0, onClick: () => void completeMergeNow() },
+              mergeBusy === 'complete' ? t('merge.completing') : t('merge.complete'))
+            : null))
+
+      const syncPullStatus = syncReport === null || syncReport.pull === undefined ? null : syncReport.pull.status
+      const syncPushStatus = syncReport === null || syncReport.push === undefined ? null : syncReport.push.status
+      const syncConflictList = (conflicts) => h('div', null, (conflicts ?? []).map((item) => h('div', { key: item.path, className: 'gct-config-row' },
+        h('button', {
+          type: 'button',
+          className: 'gdt-path gdt-link',
+          title: item.path,
+          onClick: () => openConflictFile(item.path),
+        }, item.path),
+        h('span', { className: 'gdt-summary' }, conflictTypeLabel(item.type)))))
+      const pullConflictBanner = syncReport === null || syncDismissed || syncPullStatus !== 'conflict' || !hasConflicts
+        ? null
+        : h('div', {
+          key: 'sync-pull-conflict',
+          className: 'gdt-sync-banner',
+          role: 'alert',
+          style: { borderColor: 'var(--dsw-alias-state-warn-primary)' },
+        },
+        h('div', { className: 'gdt-sync-title', style: { color: 'var(--dsw-alias-state-warn-primary)' } },
+          `↓ ${t('sync.pullConflictTitle')}`),
+        h('div', { className: 'gdt-summary' }, t('sync.pullConflictHint')),
+        syncConflictList(syncReport.pull.conflicts),
+        h('div', { className: 'gct-actions' },
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: conflictPaths.length === 0,
+            onClick: () => void copyConflictList(conflictPaths),
+          }, t('sync.copyConflicts')),
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: syncPhase !== null || hasConflicts,
+            onClick: () => void retrySyncPush(),
+          }, t('sync.retryPush')),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => setSyncDismissed(true) }, t('sync.later'))))
+      const pushConflictBanner = syncReport === null || syncDismissed || syncPushStatus !== 'rejected'
+        ? null
+        : h('div', {
+          key: 'sync-push-conflict',
+          className: 'gdt-sync-banner',
+          role: 'alert',
+          style: { borderColor: 'var(--dsw-alias-state-error-primary)' },
+        },
+        h('div', { className: 'gdt-sync-title', style: { color: 'var(--dsw-alias-state-error-primary)' } },
+          `↑ ${t('sync.pushConflictTitle')}`),
+        h('div', { className: 'gdt-summary' }, t('sync.pushConflictHint')),
+        syncReport.push !== undefined && typeof syncReport.push.message === 'string' && syncReport.push.message !== ''
+          ? h('div', { className: 'gdt-summary' }, t('sync.pushRejected', { message: syncReport.push.message }))
+          : null,
+        h('div', { className: 'gct-actions' },
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: syncPhase !== null,
+            onClick: () => void retrySyncPush(),
+          }, t('sync.retryPush')),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => setSyncDismissed(true) }, t('sync.later'))))
+      const pushBlockedBanner = syncReport === null || syncDismissed || (syncPushStatus !== 'blocked' && syncPushStatus !== 'no-upstream')
+        ? null
+        : h('div', {
+          key: 'sync-push-blocked',
+          className: 'gdt-sync-banner',
+          role: 'alert',
+          style: { borderColor: 'var(--dsw-alias-state-error-primary)' },
+        },
+        h('div', { className: 'gdt-sync-title', style: { color: 'var(--dsw-alias-state-error-primary)' } },
+          `↑ ${syncReport.push.reason === 'no-upstream' ? t('sync.state.no-upstream') : t('sync.blockedConflicts')}`),
+        hasConflicts ? syncConflictList(conflictTypes) : null,
+        h('div', { className: 'gct-actions' },
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: syncPhase !== null || hasConflicts,
+            onClick: () => void retrySyncPush(),
+          }, t('sync.retryPush')),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => setSyncDismissed(true) }, t('sync.later'))))
+      const syncDetails = !syncLogOpen ? null : h('div', { className: 'gct-merge' },
+        h('div', { className: 'gct-config-title' }, t('sync.detailsTitle')),
+        syncLog === null
+          ? h('div', { className: 'gdt-note' }, t('panel.loading'))
+          : syncLog.length === 0
+            ? h('div', { className: 'gdt-note' }, t('sync.noLog'))
+            : h('div', null, syncLog.map((entry, index) => h('div', { key: `${entry.at}-${index}`, className: 'gct-config-row' },
+              h('span', { className: 'gdt-summary' }, `${t('sync.pull')}: ${syncStateLabel(entry.pull)}`),
+              h('span', { className: 'gdt-summary' }, `${t('sync.push')}: ${syncStateLabel(entry.push)}`),
+              h('span', { className: 'gdt-summary' }, String(entry.at).replace('T', ' ').slice(0, 19)),
+              h('span', { className: 'gdt-summary' }, t('sync.typeLabel') + ' ' + String(
+                ((entry.pull?.conflicts?.length ?? 0) + (entry.push?.conflicts?.length ?? 0)),
+              ))))))
 
       const banners = [
         actionError === null ? null : h('div', { key: 'action-error', className: 'gdt-error', role: 'alert' }, errorText(actionError)),
         notice === null ? null : h('div', { key: 'notice', className: 'gdt-note' }, notice),
+        pullConflictBanner,
+        pushConflictBanner,
+        pushBlockedBanner,
         repoInfo !== null && repoInfo !== undefined && repoInfo.operation !== 'none' && repoInfo.operation !== 'merge'
           ? h('div', { key: 'operation', className: 'gdt-note' }, t('panel.operation', { op: opName(repoInfo.operation) }))
           : null,
@@ -3458,6 +3852,7 @@ window.__ModuleLoader__.load({
         commitBar,
         remoteBar,
         conflictSection,
+        syncDetails,
         banners,
         h('div', { className: 'gdt-split' }, statusNodes, fileList, diffPane))
     }

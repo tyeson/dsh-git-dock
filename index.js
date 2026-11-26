@@ -359,6 +359,23 @@ async function detectOperation(gitDir) {
 }
 
 /**
+ * Classify one unmerged index entry by its porcelain XY code.
+ *
+ * @param {string} x - index-side status code.
+ * @param {string} y - worktree-side status code.
+ * @returns {string} conflict type key.
+ */
+function conflictTypeOf(x, y) {
+  const code = `${x}${y}`
+  if (code === 'UU') return 'content'
+  if (code === 'AA') return 'both-added'
+  if (code === 'DD') return 'both-deleted'
+  if (code === 'AU' || code === 'UA') return 'added'
+  if (code === 'DU' || code === 'UD') return 'deleted-modified'
+  return 'other'
+}
+
+/**
  * Read the full repository state for one session.
  *
  * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
@@ -383,9 +400,13 @@ async function readRepoState(ctx, sessionId, signal) {
     detectOperation(gitDir),
   ])
   const status = parseStatusV2(statusRaw)
-  const conflictPaths = parseStatusRows(statusRaw)
-    .filter((row) => row.conflict === true)
-    .map((row) => row.path)
+  const conflictRows = parseStatusRows(statusRaw).filter((row) => row.conflict === true)
+  const conflictPaths = conflictRows.map((row) => row.path)
+  const conflictTypes = conflictRows.map((row) => ({
+    path: row.path,
+    type: conflictTypeOf(row.x, row.y),
+    code: `${row.x}${row.y}`,
+  }))
   return {
     repoRoot,
     repoName: basename(repoRoot),
@@ -398,6 +419,7 @@ async function readRepoState(ctx, sessionId, signal) {
     behind: status.behind,
     operation,
     conflictPaths,
+    conflictTypes,
     running: isSessionRunning(ctx, session),
     changes: {
       staged: status.staged,
@@ -2013,6 +2035,12 @@ async function pushRemote(ctx, body, signal) {
   return withRepoLock(repoRoot, async () => {
     const before = await readRepoState(ctx, body.sessionId, signal)
     if (before.detached === true || before.branch === null) throw new ApiError('detached', 'cannot push a detached HEAD', 409)
+    if (before.conflictPaths.length > 0) {
+      throw new ApiError('unresolved-conflicts', 'resolve every conflicted file before pushing', 409, { conflicts: before.conflictTypes })
+    }
+    if (before.operation !== 'none') {
+      throw new ApiError('operation-in-progress', `finish the ${before.operation} first`, 409, { operation: before.operation })
+    }
     let upstream = null
     try {
       upstream = (await gitText(before.repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { signal })).trim()
@@ -2043,6 +2071,190 @@ async function pushRemote(ctx, body, signal) {
       throw new ApiError(rejected ? 'push-rejected' : 'push-failed', firstLine(detail) || 'git push failed', 409, { detail: detail.slice(0, 4_000) })
     }
     return { repo: await readRepoState(ctx, body.sessionId, signal), setUpstream: upstream === null || upstream === '', upstream: upstream ?? null }
+  })
+}
+
+// ── Sync: pull phase, push phase, and a per-repository result log ─────────
+
+/** File that keeps the newest sync results (pull and push separately). */
+function syncLogFile() {
+  return join(dshHomePath(), 'dsh-git-dock', 'sync-log.json')
+}
+
+/**
+ * Append one sync result for a repository, keeping the newest 60 entries.
+ *
+ * @param {string} repoRoot - repository the result belongs to.
+ * @param {object} entry - one sync report.
+ * @returns {Promise<void>} resolves after a best-effort write.
+ */
+async function appendSyncLog(repoRoot, entry) {
+  try {
+    const file = syncLogFile()
+    await mkdir(dirname(file), { recursive: true })
+    let entries = []
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf8'))
+      if (Array.isArray(parsed)) entries = parsed
+    } catch {
+      // A missing or broken log starts over.
+    }
+    entries.unshift(entry)
+    while (entries.length > 60) entries.pop()
+    await writeFile(file, JSON.stringify(entries, null, 2), 'utf8')
+  } catch {
+    // Logging must never fail the sync itself.
+  }
+}
+
+/**
+ * Read the newest sync results for one repository.
+ *
+ * @param {string} repoRoot - repository to filter by.
+ * @returns {Promise<object[]>} newest-first entries.
+ */
+async function readSyncLog(repoRoot) {
+  try {
+    const parsed = JSON.parse(await readFile(syncLogFile(), 'utf8'))
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((entry) => entry !== null && typeof entry === 'object' && entry.repoRoot === repoRoot).slice(0, 20)
+  } catch {
+    return []
+  }
+}
+
+/** Report one sync phase result to the log and to the caller. */
+async function finishSyncPhase(repoRoot, entry) {
+  await appendSyncLog(repoRoot, entry)
+  return entry
+}
+
+/**
+ * Pull phase of Sync: fetch, then fast-forward or merge the upstream.
+ * Merge conflicts end the phase with the conflicted file list and types.
+ */
+async function syncPull(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    const entry = {
+      at: new Date().toISOString(),
+      branch: before.branch,
+      head: before.head,
+      repoRoot: before.repoRoot,
+      pull: { status: 'up-to-date', conflicts: [] },
+      push: { status: 'skipped' },
+    }
+    if (before.detached === true) throw new ApiError('detached', 'cannot sync a detached HEAD', 409)
+    if (before.conflictPaths.length > 0) {
+      entry.pull = { status: 'blocked', reason: 'unresolved-conflicts', conflicts: before.conflictTypes }
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    const fetch = await runGit(before.repoRoot, ['fetch', '--all', '--prune'], {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: 180_000,
+    })
+    if (fetch.code !== 0) {
+      entry.pull = { status: 'fetch-error', message: firstLine(fetch.stderr) || 'git fetch failed' }
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    const fetched = await readRepoState(ctx, body.sessionId, signal)
+    if (fetched.behind === 0) {
+      entry.pull = { status: fetched.ahead > 0 ? 'up-to-date' : 'up-to-date' }
+      entry.repo = fetched
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    const target = fetched.upstream === null || fetched.upstream === ''
+      ? `origin/${fetched.branch}`
+      : fetched.upstream
+    if (fetched.ahead === 0) {
+      const fastForward = await runGit(before.repoRoot, ['merge', '--ff-only', target], {
+        signal,
+        rawResult: true,
+        exitCodes: [0, 1],
+        timeoutMs: 180_000,
+      })
+      if (fastForward.code !== 0) {
+        entry.pull = { status: 'error', message: firstLine(fastForward.stderr) || 'fast-forward failed' }
+      } else {
+        entry.pull = { status: 'fast-forward' }
+      }
+    } else {
+      const merge = await runGit(before.repoRoot, ['merge', '--no-edit', target], {
+        signal,
+        rawResult: true,
+        exitCodes: [0, 1],
+        timeoutMs: 180_000,
+      })
+      if (merge.code !== 0) {
+        const afterMerge = await readRepoState(ctx, body.sessionId, signal)
+        if (afterMerge.conflictPaths.length > 0) {
+          entry.pull = { status: 'conflict', message: 'merge conflicts', conflicts: afterMerge.conflictTypes }
+        } else {
+          entry.pull = { status: 'error', message: firstLine(merge.stderr) || 'git merge failed' }
+        }
+        entry.repo = afterMerge
+        return finishSyncPhase(before.repoRoot, entry)
+      }
+      entry.pull = { status: 'merged' }
+    }
+    entry.repo = await readRepoState(ctx, body.sessionId, signal)
+    return finishSyncPhase(before.repoRoot, entry)
+  })
+}
+
+/**
+ * Push phase of Sync. Refuses while conflicts or an operation is still open,
+ * so an accidental push never carries conflict markers upstream.
+ */
+async function syncPush(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    const entry = {
+      at: new Date().toISOString(),
+      branch: before.branch,
+      head: before.head,
+      repoRoot: before.repoRoot,
+      pull: { status: 'skipped' },
+      push: { status: 'up-to-date' },
+    }
+    if (before.conflictPaths.length > 0) {
+      entry.push = { status: 'blocked', reason: 'unresolved-conflicts', conflicts: before.conflictTypes }
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    if (before.operation !== 'none') {
+      entry.push = { status: 'blocked', reason: 'operation-in-progress', operation: before.operation }
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    if (before.ahead === 0) {
+      entry.repo = before
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    if (before.upstream === null || before.upstream === '') {
+      entry.push = { status: 'no-upstream', reason: 'no-upstream' }
+      return finishSyncPhase(before.repoRoot, entry)
+    }
+    const push = await runGit(before.repoRoot, ['push'], {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: 180_000,
+    })
+    if (push.code !== 0) {
+      const rejected = /rejected|non-fast-forward|fetch first/i.test(push.stderr)
+      entry.push = {
+        status: rejected ? 'rejected' : 'error',
+        message: firstLine(push.stderr) || 'git push failed',
+        detail: push.stderr.slice(0, 4_000),
+      }
+    } else {
+      entry.push = { status: 'pushed' }
+    }
+    entry.repo = await readRepoState(ctx, body.sessionId, signal)
+    return finishSyncPhase(before.repoRoot, entry)
   })
 }
 
@@ -2387,6 +2599,22 @@ const API = {
   /** Push the current branch. */
   async push(ctx, body, signal) {
     return pushRemote(ctx, body, signal)
+  },
+
+  /** Sync phase 1: fetch, then fast-forward or merge the upstream. */
+  async syncPull(ctx, body, signal) {
+    return syncPull(ctx, body, signal)
+  },
+
+  /** Sync phase 2: push, refused while conflicts or an operation remain. */
+  async syncPush(ctx, body, signal) {
+    return syncPush(ctx, body, signal)
+  },
+
+  /** Newest sync results (pull and push) for this repository. */
+  async syncLog(ctx, body, signal) {
+    const state = await readRepoState(ctx, body.sessionId, signal)
+    return { entries: await readSyncLog(state.repoRoot) }
   },
 
   /** Switch the working tree to an existing local branch. */

@@ -66,8 +66,19 @@ switching and creating branches.
   stay manual. Commit-message drafting has its own model and reasoning-effort
   picker in the commit bar: it defaults to the conversation's current choice and
   remembers the last pick in `localStorage`, and the chosen route is sent with the
-  `commitMessage` request. Switching continues to record `HEAD` under
-  `refs/dsh/backup/…` (20 newest kept per repository).
+  `commitMessage` request.
+- **Sync** runs as two reported phases (`syncPull` then `syncPush`): fetch, then
+  fast-forward or merge the upstream, then push. Merge conflicts end the pull
+  phase with the conflicted files typed by their porcelain XY code (content,
+  both-added, both-deleted, added, deleted/modified, other); the tab shows a
+  phase-coloured banner (amber pull, red push) with a copyable file list, a
+  per-file link that opens its diff, and a **Later** action that keeps a badge
+  with the unresolved count on the Sync button. Once the conflict markers are
+  gone and no operation remains, the interrupted push resumes automatically.
+  `syncPush` refuses while conflicts or an operation remain, and every phase
+  result is appended to `<DSH_HOME>/dsh-git-dock/sync-log.json`; the tab's
+  **Sync details** button reads the newest entries back. Switching continues to
+  record `HEAD` under `refs/dsh/backup/…` (20 newest kept per repository).
 - **Guards** — switching and creating are refused while a merge, rebase,
   cherry-pick, revert, or bisect is in progress; while the session's turn is
   open both require an explicit second confirmation; a stale panel (the
