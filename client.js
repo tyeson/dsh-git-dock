@@ -710,6 +710,7 @@ window.__ModuleLoader__.load({
       // The floating panels are mutually exclusive.
       closePanel(false)
       closeBasePicker()
+      closeModelPicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setMergeState({
@@ -922,6 +923,7 @@ window.__ModuleLoader__.load({
     function openBasePicker(sessionId, element, names, current, onSelect) {
       closeMergePicker()
       closePanel(false)
+      closeModelPicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setBaseState({
@@ -1101,6 +1103,7 @@ window.__ModuleLoader__.load({
       // The floating panels are mutually exclusive.
       closeMergePicker()
       closeBasePicker()
+      closeModelPicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       lastChipElement = element
@@ -1344,6 +1347,16 @@ window.__ModuleLoader__.load({
         '.gdt-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
         '.gdt-caret{font-size:10px;opacity:.7;margin-left:2px}',
         '.gdt-model-name{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.gdt-mp-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary)}',
+        '.gdt-mp-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+        '.gdt-mp-row[data-current="true"]{font-weight:600}',
+        '.gdt-mp-label{color:var(--dsw-alias-label-secondary);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.gdt-mp-value{display:inline-flex;align-items:center;gap:6px;max-width:190px;color:var(--dsw-alias-label-primary)}',
+        '.gdt-mp-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.gdt-mp-caret{font-size:10px;opacity:.6}',
+        '.gdt-mp-check{color:var(--dsw-alias-link);margin-left:4px}',
+        '.gdt-mp-list{border-top:1px solid var(--dsw-alias-border-l1);margin:2px 0;padding-top:2px;max-height:260px;overflow:auto}',
+        '.gdt-mp-list .gdt-mp-row{padding:6px 10px;font-size:12.5px}',
         '.gdt-summary{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}',
         '.gdt-spacer{flex:1}',
         '.gdt-btn{appearance:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}',
@@ -2242,9 +2255,13 @@ window.__ModuleLoader__.load({
       useLang()
       const snapshot = useModelStore()
       const panelRef = React.useRef(null)
+      const [submenu, setSubmenu] = React.useState(null)
       React.useEffect(() => {
         ensureStyle()
       }, [])
+      React.useEffect(() => {
+        setSubmenu(null)
+      }, [snapshot.open])
       React.useEffect(() => {
         if (snapshot.open !== true) return undefined
         const onPointerDown = (event) => {
@@ -2277,17 +2294,16 @@ window.__ModuleLoader__.load({
       if (snapshot.open !== true || snapshot.anchor === null) return null
       const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
-      const width = Math.max(260, Math.min(380, viewportWidth - 16))
+      const width = Math.max(240, Math.min(320, viewportWidth - 16))
       const left = Math.max(8, Math.min(snapshot.anchor.left, viewportWidth - width - 8))
       const below = snapshot.anchor.placement === 'below'
       const panelTop = Math.max(8, snapshot.anchor.bottom + 8)
       const bottom = Math.max(8, viewportHeight - snapshot.anchor.top + 8)
       const maxHeight = below
-        ? Math.min(460, Math.max(220, viewportHeight - snapshot.anchor.bottom - 24))
-        : Math.min(460, Math.max(220, snapshot.anchor.top - 24))
+        ? Math.min(420, Math.max(200, viewportHeight - snapshot.anchor.bottom - 24))
+        : Math.min(420, Math.max(200, snapshot.anchor.top - 24))
 
       const options = snapshot.options
-      const choice = snapshot.choice
       const flat = []
       if (options !== null) {
         for (const provider of options.providers ?? []) {
@@ -2302,82 +2318,108 @@ window.__ModuleLoader__.load({
           }
         }
       }
-      const selected = choice === null
+      const conversationCurrent = options === null || options.current === null || options.current === undefined
         ? null
-        : flat.find((entry) => entry.provider === choice.provider && entry.model === choice.model) ?? null
-      const current = options === null || options.current === null || options.current === undefined
+        : {
+          provider: options.current.provider,
+          model: options.current.model,
+          name: (flat.find((entry) => entry.provider === options.current.provider && entry.model === options.current.model) ?? { name: options.current.model }).name,
+          efforts: (flat.find((entry) => entry.provider === options.current.provider && entry.model === options.current.model) ?? { efforts: [] }).efforts,
+        }
+      const selectedModel = snapshot.choice === null
         ? null
-        : flat.find((entry) => entry.provider === options.current.provider && entry.model === options.current.model) ?? null
+        : flat.find((entry) => entry.provider === snapshot.choice.provider && entry.model === snapshot.choice.model) ?? {
+          provider: snapshot.choice.provider,
+          model: snapshot.choice.model,
+          name: snapshot.choice.model,
+          efforts: [],
+        }
+      const active = selectedModel ?? conversationCurrent
+      const activeEffortId = snapshot.choice !== null
+        ? snapshot.choice.reasoningEffort ?? null
+        : options !== null && options.current !== null && options.current !== undefined
+          ? options.current.reasoningEffort ?? null
+          : null
+      const effortLabel = (id) => {
+        if (id === null || id === undefined || id === '') return t('commit.effortAuto')
+        const effort = (active?.efforts ?? []).find((entry) => entry.id === id)
+        return effort === undefined ? id : effort.name
+      }
+      const followBase = conversationCurrent === null
+        ? null
+        : { provider: conversationCurrent.provider, model: conversationCurrent.model, reasoningEffort: null }
+      const pickFollow = () => {
+        setModelState({ choice: null })
+        if (typeof snapshot.onApply === 'function') snapshot.onApply(null)
+        setSubmenu(null)
+      }
+      const pickModel = (entry) => {
+        const keepEffort = snapshot.choice !== null && snapshot.choice.provider === entry.provider && snapshot.choice.model === entry.model
+          ? snapshot.choice.reasoningEffort
+          : null
+        pickModelInPanel({ provider: entry.provider, model: entry.model, reasoningEffort: keepEffort })
+        setSubmenu(null)
+      }
+      const pickEffort = (id) => {
+        const base = snapshot.choice ?? followBase
+        if (base === null) return
+        pickModelInPanel(Object.assign({}, base, { reasoningEffort: id }))
+        setSubmenu(null)
+      }
 
-      const modelRow = (entry) => h('div', {
-        key: `${entry.provider}/${entry.model}`,
-        className: 'dgd-row',
+      const headerRow = (label, value, open, onActivate) => h('div', {
+        className: 'gdt-mp-row',
         role: 'button',
         tabIndex: 0,
-        'data-current': selected !== null && selected.provider === entry.provider && selected.model === entry.model ? 'true' : 'false',
-        onClick: () => {
-          const nextEffort = selected !== null && selected.provider === entry.provider && selected.model === entry.model
-            ? (choice === null ? null : choice.reasoningEffort)
-            : null
-          pickModelInPanel({ provider: entry.provider, model: entry.model, reasoningEffort: nextEffort })
-        },
+        'aria-expanded': open ? 'true' : 'false',
+        onClick: onActivate,
         onKeyDown: (event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return
           event.preventDefault()
-          pickModelInPanel({ provider: entry.provider, model: entry.model, reasoningEffort: null })
+          onActivate()
         },
       },
-      h('span', { className: 'dgd-row-icon' }, selected !== null && selected.provider === entry.provider && selected.model === entry.model ? h(CheckIcon, null) : null),
-      h('span', { className: 'dgd-row-main' },
-        h('span', { className: 'dgd-row-name' }, entry.name),
-        h('span', { className: 'dgd-row-sub' }, entry.providerName)))
+      h('span', { className: 'gdt-mp-label' }, label),
+      h('span', { className: 'gdt-mp-value' },
+        h('span', { className: 'gdt-mp-text' }, value),
+        h('span', { className: 'gdt-mp-caret' }, open ? '▴' : '▾')))
 
-      const effortRow = (id, label) => h('div', {
-        key: id === null ? 'effort-auto' : `effort-${id}`,
-        className: 'dgd-row',
+      const choiceRow = (key, label, selected, handle) => h('div', {
+        key,
+        className: 'gdt-mp-row',
         role: 'button',
         tabIndex: 0,
-        'data-current': choice !== null && (choice.reasoningEffort ?? null) === id ? 'true' : 'false',
-        onClick: () => applyModelChoice(Object.assign({}, choice ?? { provider: selected.provider, model: selected.model }, { reasoningEffort: id })),
+        'data-current': selected ? 'true' : 'false',
+        onClick: handle,
         onKeyDown: (event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return
           event.preventDefault()
-          applyModelChoice(Object.assign({}, choice ?? { provider: selected.provider, model: selected.model }, { reasoningEffort: id }))
+          handle()
         },
       },
-      h('span', { className: 'dgd-row-icon' }, choice !== null && (choice.reasoningEffort ?? null) === id ? h(CheckIcon, null) : null),
-      h('span', { className: 'dgd-row-main' }, h('span', { className: 'dgd-row-name' }, label)))
+      h('span', { className: 'gdt-mp-label' }, label),
+      selected ? h('span', { className: 'gdt-mp-check' }, '✓') : null)
 
-      const body = options === null
-        ? h('div', { className: 'dgd-empty' }, t('commit.modelBusy'))
-        : flat.length === 0
-          ? h('div', { className: 'dgd-empty' }, t('commit.modelUnavailable'))
-          : h('div', null,
-            h('div', {
-              key: 'follow',
-              className: 'dgd-row',
-              role: 'button',
-              tabIndex: 0,
-              'data-current': choice === null ? 'true' : 'false',
-              onClick: () => applyModelChoice(null),
-              onKeyDown: (event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return
-                event.preventDefault()
-                applyModelChoice(null)
-              },
-            },
-            h('span', { className: 'dgd-row-icon' }, choice === null ? h(CheckIcon, null) : null),
-            h('span', { className: 'dgd-row-main' },
-              h('span', { className: 'dgd-row-name' }, t('commit.modelFollow')),
-              h('span', { className: 'dgd-row-sub' }, current === null ? (options.current === null || options.current === undefined ? '' : options.current.model) : current.name))),
-            h('div', { className: 'dgd-section' }, t('commit.modelTitle')),
-            ...flat.map(modelRow),
-            selected !== null && (selected.efforts.length > 0 || choice !== null)
-              ? h('div', null,
-                h('div', { className: 'dgd-section' }, `${t('commit.effort')} · ${selected.name}`),
-                effortRow(null, t('commit.effortAuto')),
-                ...selected.efforts.map((effort) => effortRow(effort.id, effort.name)))
-              : null)
+      const modelChoices = [
+        choiceRow('follow', t('commit.modelFollow'), snapshot.choice === null, pickFollow),
+        ...flat.map((entry) => choiceRow(
+          `model:${entry.provider}/${entry.model}`,
+          entry.name,
+          snapshot.choice !== null && snapshot.choice.provider === entry.provider && snapshot.choice.model === entry.model,
+          () => pickModel(entry),
+        )),
+      ]
+      const effortChoices = active === null
+        ? [h('div', { key: 'effort-empty', className: 'dgd-empty' }, t('commit.modelUnavailable'))]
+        : [
+          choiceRow('effort:auto', t('commit.effortAuto'), activeEffortId === null, () => pickEffort(null)),
+          ...(active.efforts ?? []).map((effort) => choiceRow(
+            `effort:${effort.id}`,
+            effort.name,
+            activeEffortId === effort.id,
+            () => pickEffort(effort.id),
+          )),
+        ]
 
       return h('div', {
         ref: panelRef,
@@ -2388,12 +2430,14 @@ window.__ModuleLoader__.load({
         role: 'dialog',
         'aria-label': t('commit.modelTitle'),
       },
-      h('div', { className: 'dgd-head' },
-        h('span', { className: 'dgd-head-icon' }, h(BranchIcon, { size: 15 })),
-        h('div', { className: 'dgd-head-text' },
-          h('span', { className: 'dgd-head-title' }, t('commit.modelTitle')),
-          h('span', { className: 'dgd-head-sub' }, t('commit.modelHint')))),
-      h('div', { className: 'dgd-body' }, body))
+      h('div', { className: 'dgd-body' },
+        options === null
+          ? h('div', { className: 'dgd-empty' }, t('commit.modelBusy'))
+          : h('div', null,
+            headerRow(t('commit.modelTitle'), active === null ? t('commit.modelBusy') : active.name, submenu === 'model', () => setSubmenu(submenu === 'model' ? null : 'model')),
+            submenu === 'model' ? h('div', { className: 'gdt-mp-list' }, modelChoices) : null,
+            headerRow(t('commit.effort'), active === null ? '' : effortLabel(activeEffortId), submenu === 'effort', () => setSubmenu(submenu === 'effort' ? null : 'effort')),
+            submenu === 'effort' ? h('div', { className: 'gdt-mp-list' }, effortChoices) : null)))
     }
 
     // ── Changes tab (sidebar.right.pane.tab) ──────────────────────────────
@@ -2803,7 +2847,7 @@ window.__ModuleLoader__.load({
         const flat = []
         for (const provider of modelOptions?.providers ?? []) {
           for (const model of provider.models ?? []) {
-            flat.push({ provider: provider.provider, name: model.name ?? model.model, model: model.model })
+            flat.push({ provider: provider.provider, name: model.name ?? model.model, model: model.model, efforts: model.efforts ?? [] })
           }
         }
         const current = modelOptions?.current ?? null
@@ -2815,7 +2859,11 @@ window.__ModuleLoader__.load({
         if (active === null) return t('commit.modelBusy')
         const match = flat.find((entry) => entry.provider === active.provider && entry.model === active.model)
         const name = match === undefined ? active.model : match.name
-        const effort = active.reasoningEffort === null || active.reasoningEffort === undefined ? '' : ` · ${active.reasoningEffort}`
+        const effortId = active.reasoningEffort === null || active.reasoningEffort === undefined ? null : active.reasoningEffort
+        const effortName = effortId === null
+          ? null
+          : (match?.efforts ?? []).find((effort) => effort.id === effortId)?.name ?? effortId
+        const effort = effortName === null ? '' : ` · ${effortName}`
         return `${name}${effort}`
       })()
 
