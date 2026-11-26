@@ -126,7 +126,7 @@ async function readJsonBody(req) {
  *
  * @param {string} cwd - directory the command runs in.
  * @param {readonly string[]} args - argument vector (no shell involved).
- * @param {{ timeoutMs?: number, signal?: AbortSignal, maxBytes?: number }} [options]
+ * @param {{ timeoutMs?: number, signal?: AbortSignal, maxBytes?: number, input?: string }} [options]
  * @returns {Promise<string>} stdout.
  */
 function runGit(cwd, args, options = {}) {
@@ -139,12 +139,19 @@ function runGit(cwd, args, options = {}) {
       child = spawn('git', args, {
         cwd,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: options.input === undefined ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...GIT_ENV },
       })
     } catch (error) {
       reject(new ApiError('git-missing', error.message, 503))
       return
+    }
+    if (options.input !== undefined) {
+      child.stdin.on('error', () => {
+        // The child may exit before reading a large patch; the exit code still
+        // reports the real result.
+      })
+      child.stdin.end(options.input)
     }
     let stdout = ''
     let stderr = ''
@@ -703,6 +710,355 @@ function parseUnifiedDiff(raw) {
 }
 
 /**
+ * Split raw unified-diff text into a preamble and hunk blocks.
+ *
+ * @param {string} raw - git diff output for one file.
+ * @returns {{ preamble: string[], hunks: object[] }} blocks to rebuild a patch from.
+ */
+function splitRawDiff(raw) {
+  const lines = raw.split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  const preamble = []
+  const hunks = []
+  let current = null
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      current = { header: line, body: [] }
+      hunks.push(current)
+      continue
+    }
+    if (current === null) {
+      preamble.push(line)
+      continue
+    }
+    current.body.push(line)
+  }
+  return { preamble, hunks }
+}
+
+/**
+ * Rebuild one hunk with a selected subset of its change lines.
+ *
+ * @param {string} header - original `@@` header line.
+ * @param {string[]} body - original body lines.
+ * @param {boolean[]} keep - one flag per body line.
+ * @returns {string} rebuilt hunk, or '' when nothing is left.
+ */
+function rebuildHunk(header, body, keep) {
+  let oldCount = 0
+  let newCount = 0
+  for (let index = 0; index < body.length; index += 1) {
+    if (keep[index] !== true) continue
+    const kind = body[index][0]
+    if (kind === ' ') {
+      oldCount += 1
+      newCount += 1
+    } else if (kind === '-') {
+      oldCount += 1
+    } else if (kind === '+') {
+      newCount += 1
+    }
+  }
+  if (oldCount === 0 && newCount === 0) return ''
+  const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(header)
+  if (match === null) return ''
+  const format = (start, count) => `${start}${count === 1 ? '' : `,${count}`}`
+  const out = [`@@ -${format(Number(match[1]), oldCount)} +${format(Number(match[2]), newCount)} @@`]
+  for (let index = 0; index < body.length; index += 1) {
+    if (keep[index] === true) out.push(body[index])
+  }
+  return out.join('\n')
+}
+
+/**
+ * Turn the client's `{ hunk, changeLines }` selection into per-body-line flags.
+ *
+ * Context lines are always kept so the hunk stays contiguous; `\ No newline`
+ * markers follow their preceding line.
+ *
+ * @param {unknown} specs - requested selection list.
+ * @param {object[]} hunks - raw hunk blocks.
+ * @returns {(boolean[])[]} matrix indexed by hunk position.
+ */
+function patchKeepMatrix(specs, hunks) {
+  const matrix = []
+  const entries = Array.isArray(specs) ? specs : []
+  for (const spec of entries) {
+    if (spec === null || typeof spec !== 'object') continue
+    const hunkIndex = Number(spec.hunk)
+    if (!Number.isInteger(hunkIndex) || hunkIndex < 0 || hunkIndex >= hunks.length) continue
+    const ordinals = Array.isArray(spec.changeLines)
+      ? [...new Set(spec.changeLines.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 0))]
+      : null
+    const keep = []
+    let ordinal = 0
+    let lastKept = true
+    let anySelected = false
+    for (const line of hunks[hunkIndex].body) {
+      const kind = line[0]
+      if (kind === '\\') {
+        keep.push(lastKept)
+        continue
+      }
+      if (kind === ' ') {
+        keep.push(true)
+        lastKept = true
+        continue
+      }
+      if (kind !== '+' && kind !== '-') {
+        keep.push(false)
+        lastKept = false
+        continue
+      }
+      const selected = ordinals === null ? true : ordinals.includes(ordinal)
+      keep.push(selected)
+      lastKept = selected
+      if (selected) anySelected = true
+      ordinal += 1
+    }
+    if (anySelected) matrix[hunkIndex] = keep
+  }
+  return matrix
+}
+
+/** Blob hash of one path as stored in the index ('' when absent). */
+async function indexBlobHash(repoRoot, path, signal) {
+  try {
+    return (await gitText(repoRoot, ['rev-parse', '--verify', '--quiet', `:${path}`], { signal })).trim()
+  } catch {
+    return ''
+  }
+}
+
+/** Git blob hash of a worktree file, computed without spawning git. */
+async function worktreeBlobHash(repoRoot, relativePath) {
+  try {
+    const bytes = await readFile(join(repoRoot, relativePath))
+    return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stage or unstage a selected subset of one file's changes.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {object} body - `{ sessionId, direction, path, untracked?, hunks, expectedIndexTree?, expectedWorktreeHash? }`.
+ * @returns {Promise<object>} the refreshed repository state.
+ */
+async function applyPatch(ctx, body, signal) {
+  const direction = body.direction === 'unstage' ? 'unstage' : 'stage'
+  const path = assertRepoPath(body.path)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation === 'merge') throw new ApiError('merge-open', 'complete the merge first', 409, { state: before })
+    if (before.operation !== 'none') throw new ApiError('operation-in-progress', `a ${before.operation} is in progress`, 409, { state: before })
+    if (before.conflictPaths.includes(path)) {
+      throw new ApiError('conflicted', 'resolve this conflict before staging parts of it', 409, { conflicts: before.conflictTypes })
+    }
+    const indexHash = await indexBlobHash(before.repoRoot, path, signal)
+    if (typeof body.expectedIndexTree === 'string' && body.expectedIndexTree !== indexHash) {
+      throw new ApiError('patch-stale', 'the staged version changed since this diff was loaded; refresh and retry', 409, { indexTree: indexHash })
+    }
+    if (direction === 'stage') {
+      const worktreeHash = await worktreeBlobHash(before.repoRoot, path)
+      if (typeof body.expectedWorktreeHash === 'string' && worktreeHash !== null && body.expectedWorktreeHash !== worktreeHash) {
+        throw new ApiError('patch-stale', 'the working tree changed since this diff was loaded; refresh and retry', 409, {})
+      }
+    }
+    const args = ['diff']
+    if (direction === 'unstage') args.push('--cached')
+    args.push('--no-color', '--no-ext-diff', '-U3')
+    if (direction === 'stage' && body.untracked === true) {
+      args.push('--no-index', '--', '/dev/null', path)
+    } else {
+      args.push('--', path)
+    }
+    const raw = await runGit(before.repoRoot, args, { signal, exitCodes: [0, 1], maxBytes: DIFF_OUTPUT_LIMIT })
+    if (/^Binary files .* differ$/m.test(raw)) {
+      throw new ApiError('binary-file', 'binary files cannot be partially staged', 409)
+    }
+    const { preamble, hunks } = splitRawDiff(raw)
+    const matrix = patchKeepMatrix(body.hunks, hunks)
+    const parts = []
+    if (preamble.length > 0) parts.push(preamble.join('\n'))
+    let appliedHunks = 0
+    let appliedLines = 0
+    for (let index = 0; index < hunks.length; index += 1) {
+      const keep = matrix[index]
+      if (keep === undefined) continue
+      const rebuilt = rebuildHunk(hunks[index].header, hunks[index].body, keep)
+      if (rebuilt === '') continue
+      parts.push(rebuilt)
+      appliedHunks += 1
+      appliedLines += keep.filter(Boolean).length
+    }
+    if (appliedHunks === 0) throw new ApiError('nothing-selected', 'select at least one change line', 400)
+    const applyArgs = ['apply', '--cached']
+    if (direction === 'unstage') applyArgs.push('--reverse')
+    const result = await runGit(before.repoRoot, applyArgs, {
+      signal,
+      input: `${parts.join('\n')}\n`,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: WRITE_TIMEOUT_MS,
+    })
+    if (result.code !== 0) {
+      const detail = String(result.stderr ?? '')
+      const reason = /does not apply|conflict|corrupt|patch failed/i.test(detail)
+        ? 'the selected changes do not apply cleanly'
+        : firstLine(detail) || 'git apply failed'
+      throw new ApiError(reason === '' ? 'patch-failed' : 'patch-failed', reason, 409, { detail: detail.slice(0, 4_000) })
+    }
+    await appendAudit({
+      action: direction === 'stage' ? 'stage.patch' : 'unstage.patch',
+      repoRoot: before.repoRoot,
+      branch: before.branch,
+      target: [path],
+      result: 'ok',
+      details: { hunks: appliedHunks, lines: appliedLines },
+    })
+    return {
+      repo: await readRepoState(ctx, body.sessionId, signal),
+      applied: { path, direction, hunks: appliedHunks, lines: appliedLines },
+    }
+  })
+}
+
+// ── A3: three-way conflict inspection ──────────────────────────────────────
+
+/** Largest text blob served for the conflict editor. */
+const CONFLICT_CONTENT_LIMIT = 512 * 1024
+
+/** Read one stage's version of a path; null when that side has no file. */
+async function conflictStageContent(repoRoot, stage, path, signal) {
+  try {
+    const raw = await runGit(repoRoot, ['show', `:${stage}:${path}`], { signal, maxBytes: CONFLICT_CONTENT_LIMIT, exitCodes: [0, 1] })
+    if (raw.length >= CONFLICT_CONTENT_LIMIT) {
+      return { content: raw.slice(0, CONFLICT_CONTENT_LIMIT), truncated: true, binary: false }
+    }
+    const binary = raw.includes('\u0000')
+    return { content: binary ? '' : raw, truncated: false, binary }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Describe every open conflict with all four versions of each file.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {object} body - `{ sessionId }`.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} the conflict descriptions.
+ */
+async function readConflictInfo(ctx, body, signal) {
+  const state = await readRepoState(ctx, body.sessionId, signal)
+  if (state.operation !== 'merge') {
+    return { operation: state.operation, conflicts: [] }
+  }
+  const rows = []
+  for (const item of state.conflictTypes) {
+    const base = await conflictStageContent(state.repoRoot, 1, item.path, signal)
+    const ours = await conflictStageContent(state.repoRoot, 2, item.path, signal)
+    const theirs = await conflictStageContent(state.repoRoot, 3, item.path, signal)
+    let result = null
+    try {
+      const bytes = await readFile(join(state.repoRoot, item.path))
+      result = {
+        content: bytes.toString('utf8').slice(0, CONFLICT_CONTENT_LIMIT),
+        truncated: bytes.length > CONFLICT_CONTENT_LIMIT,
+        binary: bytes.includes(0),
+      }
+    } catch {
+      result = null
+    }
+    rows.push({
+      path: item.path,
+      type: item.type,
+      code: item.code,
+      base,
+      ours,
+      theirs,
+      result,
+      markerCount: result === null || result.binary ? 0 : (result.content.match(/^(<{7}|={7}|>{7})(?!={7}$)/gm) ?? []).length,
+    })
+  }
+  rows.sort((left, right) => left.path.localeCompare(right.path))
+  return { operation: 'merge', branch: state.branch, conflicts: rows }
+}
+
+/**
+ * Apply one side of a conflict to the worktree and mark it resolved.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {object} body - `{ sessionId, path, side: 'ours' | 'theirs' }`.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} the refreshed repository state.
+ */
+async function acceptConflictSide(ctx, body, signal) {
+  const path = assertRepoPath(body.path)
+  const side = body.side === 'theirs' ? 'theirs' : 'ours'
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409)
+    if (!before.conflictPaths.includes(path)) {
+      throw new ApiError('not-conflicted', `not a conflicted path: ${path}`, 400, { conflicts: before.conflictPaths })
+    }
+    const checkout = await runGit(before.repoRoot, ['checkout', `--${side}`, '--', path], {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: WRITE_TIMEOUT_MS,
+    })
+    if (checkout.code !== 0) {
+      throw new ApiError('conflict-accept-failed', firstLine(checkout.stderr) || `git checkout --${side} failed`, 409, {
+        detail: String(checkout.stderr ?? '').slice(0, 4_000),
+      })
+    }
+    await runGit(before.repoRoot, ['add', '--', path], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'conflict.accept', repoRoot: before.repoRoot, branch: before.branch, target: [path], result: side })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    return { repo: after, conflicts: after.conflictTypes }
+  })
+}
+
+/**
+ * Save an edited RESULT body for one conflict and mark it resolved.
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {object} body - `{ sessionId, path, content }`.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<object>} the refreshed repository state.
+ */
+async function saveConflictResult(ctx, body, signal) {
+  const path = assertRepoPath(body.path)
+  if (typeof body.content !== 'string') throw new ApiError('bad-request', 'content is required', 400)
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409)
+    if (!before.conflictPaths.includes(path)) {
+      throw new ApiError('not-conflicted', `not a conflicted path: ${path}`, 400, { conflicts: before.conflictPaths })
+    }
+    const target = join(before.repoRoot, path)
+    try {
+      await mkdir(dirname(target), { recursive: true })
+      await writeFile(target, body.content, 'utf8')
+    } catch {
+      throw new ApiError('conflict-save-failed', 'could not write the conflicted file', 409, { path })
+    }
+    await runGit(before.repoRoot, ['add', '--', path], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'conflict.save', repoRoot: before.repoRoot, branch: before.branch, target: [path], result: 'ok' })
+    const after = await readRepoState(ctx, body.sessionId, signal)
+    return { repo: after, conflicts: after.conflictTypes }
+  })
+}
+
+/**
  * Change list for one scope: the working tree, or the branch against a base.
  *
  * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
@@ -798,20 +1154,31 @@ async function readChanges(ctx, body, signal) {
 async function readDiff(ctx, body, signal) {
   const state = await readRepoState(ctx, body.sessionId, signal)
   const path = assertRepoPath(body.path)
-  const scope = body.scope === 'branch' ? 'branch' : 'worktree'
+  const scope = body.scope === 'branch' ? 'branch' : body.scope === 'staged' ? 'staged' : 'worktree'
   let args
   if (scope === 'branch') {
     const resolved = await resolveBase(state.repoRoot, body.base, signal)
     if (resolved.base === null) throw new ApiError('no-base', 'no base branch could be resolved', 409)
     args = ['diff', '--no-color', '--no-ext-diff', '-U3', `${resolved.base}...HEAD`, '--', path]
+  } else if (scope === 'staged') {
+    args = ['diff', '--cached', '--no-color', '--no-ext-diff', '-U3', '--', path]
   } else if (body.untracked === true) {
     args = ['diff', '--no-index', '--no-color', '--no-ext-diff', '-U3', '--', '/dev/null', path]
   } else {
-    args = ['diff', '--no-color', '--no-ext-diff', '-U3', 'HEAD', '--', path]
+    // Index vs working tree: exactly the changes that staging would capture.
+    args = ['diff', '--no-color', '--no-ext-diff', '-U3', '--', path]
   }
   const raw = await runGit(state.repoRoot, args, { signal, maxBytes: DIFF_OUTPUT_LIMIT, exitCodes: [0, 1] })
   const parsed = parseUnifiedDiff(raw)
-  return { path, scope, binary: parsed.binary, hunks: parsed.hunks, truncated: parsed.truncated }
+  return {
+    path,
+    scope,
+    binary: parsed.binary,
+    hunks: parsed.hunks,
+    truncated: parsed.truncated,
+    indexTree: await indexBlobHash(state.repoRoot, path, signal),
+    worktreeHash: scope === 'staged' ? null : await worktreeBlobHash(state.repoRoot, path),
+  }
 }
 
 // ── P2: merging ───────────────────────────────────────────────────────────
@@ -2868,6 +3235,31 @@ const API = {
   /** Unstage paths (or everything). */
   async unstage(ctx, body, signal) {
     return unstagePaths(ctx, body, signal)
+  },
+
+  /** Stage a selected subset of one file's changes. */
+  async stagePatch(ctx, body, signal) {
+    return applyPatch(ctx, Object.assign({}, body, { direction: 'stage' }), signal)
+  },
+
+  /** Unstage a selected subset of one file's staged changes. */
+  async unstagePatch(ctx, body, signal) {
+    return applyPatch(ctx, Object.assign({}, body, { direction: 'unstage' }), signal)
+  },
+
+  /** Four versions of every conflicted file for the three-way editor. */
+  async conflictInfo(ctx, body, signal) {
+    return readConflictInfo(ctx, body, signal)
+  },
+
+  /** Take one side of a conflict and mark it resolved. */
+  async conflictAccept(ctx, body, signal) {
+    return acceptConflictSide(ctx, body, signal)
+  },
+
+  /** Save an edited result for a conflict and mark it resolved. */
+  async conflictSave(ctx, body, signal) {
+    return saveConflictResult(ctx, body, signal)
   },
 
   /** Discard paths through a recoverable stash plus a backup ref. */

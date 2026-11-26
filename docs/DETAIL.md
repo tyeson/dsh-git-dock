@@ -88,6 +88,19 @@ switching and creating branches.
   dependency-free syntax highlighting for common languages. `Esc` closes it,
   `↑/↓` or `J/K` switch between the changed files; because the list stays mounted,
   closing returns to the same scroll position.
+- **Partial staging (A3)** — the working-tree tab diffs the index against the
+  worktree, and the staged tab (`git diff --cached`) diffs HEAD against the index;
+  each change line can be toggled, a hunk header offers whole-hunk selection, and
+  the selection bar applies it through `git apply --cached` (reversed for
+  unstage). The request carries the index blob hash and worktree blob hash taken
+  from the loaded diff, so an external editor or agent edit refuses with
+  `patch-stale` instead of staging the wrong bytes.
+- **Three-way conflict editor (A3)** — `conflictInfo` reads the `:1:`/`:2:`/`:3:`
+  blobs plus the worktree result for every conflicted path; the conflict row
+  expands into Base / Current / Incoming / Result panes, offers Accept current and
+  Accept incoming (`git checkout --ours|--theirs` + `git add`), and lets the user
+  edit the result before saving and marking it resolved. Resolving never commits:
+  the merge still completes only on explicit confirmation.
 - **Repository registry (A1)** — repositories are registered under
   `<DSH_HOME>/dsh-git-dock/repositories.json` (canonical real path, id, timestamps)
   and the review tab's repository menu switches the session's active repository or

@@ -40,6 +40,10 @@
 |---|---|---|---|
 | `stale` | 409 | HEAD 已变化（expectHead 不匹配） | 刷新后重试 |
 | `nothing-staged` | 409 | 没有可提交/可汇总的改动 | 先暂存或修改文件 |
+| `patch-stale` | 409 | 索引或工作区在 diff 加载后已变化（部分暂存） | 刷新后重新选择再应用 |
+| `patch-failed` | 409 | 所选变更无法干净应用 | 查看 details.detail |
+| `nothing-selected` | 400 | 未选择任何变更行 | 选择后重试 |
+| `binary-file` | 409 | 二进制文件不能部分暂存 | 整体暂存或跳过 |
 | `message-required` | 400 | 提交信息为空 | 填写提交信息 |
 | `message-too-long` | 400 | 超过提交信息长度上限 | 精简信息 |
 | `commit-failed` | 400 | git commit 失败 | 查看 details.detail |
@@ -67,6 +71,9 @@
 | `conflicts-remain` | 409 | 仍有未解决冲突 | 解决冲突后继续 |
 | `not-conflicted` | 400 | 文件不是冲突文件 | 刷新冲突列表 |
 | `unresolved-conflicts` | 409 | 存在未解决冲突，操作被阻止 | 解决冲突 |
+| `conflicted` | 409 | 文件处于冲突中，不能部分暂存 | 先解决冲突 |
+| `conflict-accept-failed` | 409 | `git checkout --ours/--theirs` 失败 | 查看 details.detail |
+| `conflict-save-failed` | 409 | 写入结果文件失败 | 检查权限与路径 |
 | `detached` | 409 | detached HEAD | 切回分支 |
 | `detached-confirm` | 409 | 需要二次确认的 detached 操作 | 确认后重试 |
 
@@ -95,4 +102,4 @@
 {"at":"2026-11-26T08:00:00.000Z","id":"…","action":"discard","repoRoot":"C:/repo","branch":"main","target":["a.ts"],"result":"stashed"}
 ```
 
-当前覆盖动作：`discard`、`discard.undo`、`commit.amend`、`merge.abort`、`merge.complete`、`push`。日志不记录文件内容与凭证。
+当前覆盖动作：`discard`、`discard.undo`、`commit.amend`、`merge.abort`、`merge.complete`、`push`、`stage.patch`、`unstage.patch`、`conflict.accept`、`conflict.save`。日志不记录文件内容与凭证。

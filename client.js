@@ -278,6 +278,7 @@ window.__ModuleLoader__.load({
         'err.not-staged': '没有已暂存的改动',
         'tab.title': 'Git 变更',
         'tab.scope.worktree': '工作区',
+        'tab.scope.staged': '暂存区',
         'tab.scope.branch': '分支对比',
         'tab.base': '基线',
         'tab.summary': '{files} 个文件 · +{add} −{del}',
@@ -312,6 +313,24 @@ window.__ModuleLoader__.load({
         'preview.open': '全屏预览',
         'stage.stage': '暂存',
         'stage.unstage': '取消暂存',
+        'patch.title': '{n} 处变更已选（{dir}）',
+        'patch.apply': '应用所选',
+        'patch.clear': '清空',
+        'patch.hunkAll': '整段',
+        'patch.toggleHint': '点击变更行可单独选择',
+        'patch.stale': '文件或索引已变化，已重新加载；请重试',
+        'conflict.editorTitle': '三方对比：{path}',
+        'conflict.base': 'Base（共同祖先）',
+        'conflict.ours': 'Current（当前分支）',
+        'conflict.theirs': 'Incoming（合入分支）',
+        'conflict.result': 'Result（结果）',
+        'conflict.acceptOurs': '采用 Current',
+        'conflict.acceptTheirs': '采用 Incoming',
+        'conflict.save': '保存结果并标记已解决',
+        'conflict.missing': '该侧无此文件',
+        'conflict.binary': '二进制文件，无法展示内容',
+        'conflict.markers': '仍有 {n} 个冲突标记',
+        'conflict.saving': '保存中…',
         'diff.expand': '显示全部',
         'diff.collapse': '收起',
         'tab.side': '并排',
@@ -571,6 +590,7 @@ window.__ModuleLoader__.load({
         'err.not-staged': 'No staged changes',
         'tab.title': 'Git changes',
         'tab.scope.worktree': 'Working tree',
+        'tab.scope.staged': 'Staged',
         'tab.scope.branch': 'Branch',
         'tab.base': 'Base',
         'tab.summary': '{files} files · +{add} −{del}',
@@ -605,6 +625,24 @@ window.__ModuleLoader__.load({
         'preview.open': 'Full-screen preview',
         'stage.stage': 'Stage',
         'stage.unstage': 'Unstage',
+        'patch.title': '{n} change(s) selected ({dir})',
+        'patch.apply': 'Apply selection',
+        'patch.clear': 'Clear',
+        'patch.hunkAll': 'Whole hunk',
+        'patch.toggleHint': 'Click a changed line to select it individually',
+        'patch.stale': 'The file or index changed, so the diff was reloaded; retry',
+        'conflict.editorTitle': 'Three-way: {path}',
+        'conflict.base': 'Base (merge base)',
+        'conflict.ours': 'Current (this branch)',
+        'conflict.theirs': 'Incoming (merged branch)',
+        'conflict.result': 'Result',
+        'conflict.acceptOurs': 'Accept current',
+        'conflict.acceptTheirs': 'Accept incoming',
+        'conflict.save': 'Save result and mark resolved',
+        'conflict.missing': 'This side has no such file',
+        'conflict.binary': 'Binary file, content not shown',
+        'conflict.markers': '{n} conflict marker(s) remain',
+        'conflict.saving': 'Saving…',
         'diff.expand': 'Show all',
         'diff.collapse': 'Collapse',
         'tab.side': 'Side by side',
@@ -1655,6 +1693,17 @@ window.__ModuleLoader__.load({
         '.gct-config-label{color:var(--dsw-alias-label-secondary);font-size:12px;min-width:120px;flex:none}',
         '.gct-merge{padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:6px}',
         '.gct-merge-list{max-height:240px;overflow:auto;display:flex;flex-direction:column}',
+        '.gdt-patch-bar{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb, var(--dsw-alias-link) 8%, transparent)}',
+        '.gdt-line[data-selected="true"]{background:color-mix(in srgb, var(--dsw-alias-link) 18%, transparent)}',
+        '.gdt-line[role="button"]{cursor:pointer}',
+        '.gdt-hunk-head{display:flex;align-items:center;justify-content:space-between;gap:8px;position:sticky;top:0;z-index:1;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:11.5px;line-height:18px;padding:1px 6px}',
+        '.gdt-hunk-btn{height:18px;padding:0 6px;font-size:10.5px;flex:none}',
+        '.gct-conflict{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--dsw-alias-border-l1);padding:4px 0}',
+        '.gct-conflict-editor{border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,8px);padding:6px;display:flex;flex-direction:column;gap:6px;background:var(--dsw-alias-bg-layer-1)}',
+        '.gct-conflict-tabs{display:flex;flex-wrap:wrap;gap:4px}',
+        '.gct-conflict-body{min-height:120px;max-height:320px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base)}',
+        '.gct-conflict-pre{margin:0;padding:6px;font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:12px;line-height:17px;white-space:pre;color:var(--dsw-alias-label-primary)}',
+        '.gct-conflict-textarea{width:100%;height:280px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:12px;line-height:17px;padding:6px;resize:vertical}',
       ].join('\n')
       if (existing === null) document.head.appendChild(style)
     }
@@ -2861,13 +2910,41 @@ window.__ModuleLoader__.load({
     function UnifiedDiff(props) {
       const rows = []
       props.hunks.forEach((hunk, hunkIndex) => {
-        rows.push(h('div', { key: `hunk-${hunkIndex}`, className: 'gdt-hunk-head' }, hunkLabel(hunk)))
+        const editable = props.editable === true
+        const changeLineIndexes = []
+        if (editable) {
+          hunk.lines.forEach((line, lineIndex) => {
+            if (line.kind === '-' || line.kind === '+') changeLineIndexes.push(lineIndex)
+          })
+        }
+        const allSelected = editable && changeLineIndexes.every((lineIndex) => props.isLineSelected(hunkIndex, lineIndex))
+        rows.push(h('div', { key: `hunk-${hunkIndex}`, className: 'gdt-hunk-head' },
+          hunkLabel(hunk),
+          editable
+            ? h('button', {
+              type: 'button',
+              className: 'gdt-btn gdt-hunk-btn',
+              'data-active': allSelected ? 'true' : 'false',
+              onClick: () => props.onHunkSelect(hunkIndex, !allSelected),
+            }, t('patch.hunkAll'))
+            : null))
         hunk.lines.forEach((line, lineIndex) => {
+          const lineEditable = editable && (line.kind === '-' || line.kind === '+')
           rows.push(h('div', {
             key: `line-${hunkIndex}-${lineIndex}`,
             className: 'gdt-line',
             'data-kind': line.kind,
             'data-wrap': props.wrap ? 'true' : 'false',
+            'data-selected': lineEditable && props.isLineSelected(hunkIndex, lineIndex) ? 'true' : 'false',
+            role: lineEditable ? 'button' : undefined,
+            tabIndex: lineEditable ? 0 : undefined,
+            title: lineEditable ? t('patch.toggleHint') : undefined,
+            onClick: lineEditable ? () => props.onToggleLine(hunkIndex, lineIndex) : undefined,
+            onKeyDown: lineEditable ? (event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              props.onToggleLine(hunkIndex, lineIndex)
+            } : undefined,
           },
           h('span', { className: 'gdt-no' }, line.oldNo === null ? '' : String(line.oldNo)),
           h('span', { className: 'gdt-no' }, line.newNo === null ? '' : String(line.newNo)),
@@ -2932,6 +3009,64 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null, rows)
     }
 
+    /** Three-way comparison for one conflicted file: base/ours/theirs/result. */
+    function ConflictEditor(props) {
+      useLang()
+      const { item, tab } = props
+      const sides = [
+        { key: 'base', label: t('conflict.base'), value: item.base },
+        { key: 'ours', label: t('conflict.ours'), value: item.ours },
+        { key: 'theirs', label: t('conflict.theirs'), value: item.theirs },
+        { key: 'result', label: t('conflict.result'), value: item.result },
+      ]
+      const active = sides.find((side) => side.key === tab) ?? sides[sides.length - 1]
+      return h('div', { className: 'gct-conflict-editor' },
+        h('div', { className: 'gct-config-title' }, t('conflict.editorTitle', { path: item.path })),
+        h('div', { className: 'gct-conflict-tabs' },
+          sides.map((side) => h('button', {
+            key: side.key,
+            type: 'button',
+            className: 'gdt-btn',
+            'data-active': active.key === side.key ? 'true' : 'false',
+            onClick: () => props.onTab(side.key),
+          }, side.label))),
+        h('div', { className: 'gct-conflict-body' },
+          active.value === null
+            ? h('div', { className: 'gdt-note' }, t('conflict.missing'))
+            : active.value.binary === true
+              ? h('div', { className: 'gdt-note' }, t('conflict.binary'))
+              : active.key === 'result'
+                ? h('textarea', {
+                  className: 'gct-conflict-textarea',
+                  spellCheck: false,
+                  value: props.draft ?? active.value.content,
+                  onChange: (event) => props.onDraft(event.target.value),
+                })
+                : h('pre', { className: 'gct-conflict-pre' }, active.value.content)),
+        h('div', { className: 'gct-actions' },
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: props.busy !== null,
+            onClick: () => props.onAccept('ours'),
+          }, props.busy === 'ours' ? t('sync.busy') : t('conflict.acceptOurs')),
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: props.busy !== null,
+            onClick: () => props.onAccept('theirs'),
+          }, props.busy === 'theirs' ? t('sync.busy') : t('conflict.acceptTheirs')),
+          h('span', { className: 'gdt-spacer' }),
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: props.busy !== null || props.draft === null,
+            onClick: () => void props.onSave(),
+          }, props.busy === 'save' ? t('conflict.saving') : t('conflict.save'))))
+    }
+
+    // ── Changes tab (sidebar.right.pane.tab) ──────────────────────────────
+
     /** The right-sidebar review surface: change list + one file's comparison. */
     function ChangesView(props) {
       useLang()
@@ -2988,6 +3123,9 @@ window.__ModuleLoader__.load({
       const [expandedDirs, setExpandedDirs] = React.useState({})
       const [fileScrollTop, setFileScrollTop] = React.useState(0)
       const [diffExpanded, setDiffExpanded] = React.useState(false)
+      const [patchSel, setPatchSel] = React.useState({})
+      const [patchBusy, setPatchBusy] = React.useState(false)
+      const diffMetaRef = React.useRef({ indexTree: '', worktreeHash: null })
       const popupRef = React.useRef(null)
       React.useEffect(() => {
         if (sessionId === undefined) return undefined
@@ -3193,6 +3331,8 @@ window.__ModuleLoader__.load({
             })
             if (cancelled) return
             setDiff(value)
+            diffMetaRef.current = { indexTree: value.indexTree ?? '', worktreeHash: value.worktreeHash ?? null }
+            setPatchSel({})
             setDiffStatus('ready')
           } catch (thrown) {
             if (cancelled) return
@@ -3237,6 +3377,9 @@ window.__ModuleLoader__.load({
       if (sessionId === undefined) return h('div', { className: 'gdt-empty' }, t('panel.noSession'))
 
       const files = data === null ? [] : data.files ?? []
+      // The staged tab narrows the list to the index; the diff preview keeps the
+      // full change set so keyboard switching still walks every file.
+      const visibleFiles = scope === 'staged' ? files.filter((file) => file.staged === true) : files
       const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0)
       const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)
       const summary = t('tab.summary', { files: files.length, add: additions, del: deletions })
@@ -3245,8 +3388,172 @@ window.__ModuleLoader__.load({
 
       const pickFile = (file) => {
         setDiffExpanded(false)
+        setPatchSel({})
         setSelected({ path: file.path, untracked: file.status === '?' })
       }
+
+      // ── A3: partial staging selection ────────────────────────────────────
+
+      /** Indexes of the change lines in one hunk. */
+      const changeLineIndexesOf = (hunk) => {
+        const indexes = []
+        hunk.lines.forEach((line, lineIndex) => {
+          if (line.kind === '-' || line.kind === '+') indexes.push(lineIndex)
+        })
+        return indexes
+      }
+
+      const isLineSelected = (hunkIndex, lineIndex) => patchSel[`${hunkIndex}:${lineIndex}`] === true
+
+      const toggleLineSelection = (hunkIndex, lineIndex) => {
+        const key = `${hunkIndex}:${lineIndex}`
+        setPatchSel((previous) => {
+          const next = Object.assign({}, previous)
+          if (next[key] === true) delete next[key]
+          else next[key] = true
+          return next
+        })
+      }
+
+      const selectHunkLines = (hunkIndex, on) => {
+        setPatchSel((previous) => {
+          const next = Object.assign({}, previous)
+          const hunk = diff?.hunks?.[hunkIndex]
+          if (hunk === undefined) return previous
+          changeLineIndexesOf(hunk).forEach((lineIndex) => {
+            const key = `${hunkIndex}:${lineIndex}`
+            if (on) next[key] = true
+            else delete next[key]
+          })
+          return next
+        })
+      }
+
+      const clearPatchSelection = () => setPatchSel({})
+
+      /** Selected change count and per-hunk ordinal payload for the API. */
+      const patchSelectionPayload = () => {
+        if (diff === null) return { count: 0, hunks: [] }
+        let count = 0
+        const hunks = []
+        diff.hunks.forEach((hunk, hunkIndex) => {
+          const changes = changeLineIndexesOf(hunk)
+          const selected = changes.filter((lineIndex) => isLineSelected(hunkIndex, lineIndex))
+          count += selected.length
+          if (selected.length === 0) return
+          hunks.push({
+            hunk: hunkIndex,
+            changeLines: selected.length === changes.length ? undefined : selected.map((lineIndex) => changes.indexOf(lineIndex)),
+          })
+        })
+        return { count, hunks }
+      }
+
+      const applyPatchSelection = async (direction) => {
+        if (patchBusy || selected === null || diff === null) return
+        const payload = patchSelectionPayload()
+        if (payload.count === 0) return
+        setPatchBusy(true)
+        setActionError(null)
+        try {
+          await callApi(direction === 'unstage' ? 'unstagePatch' : 'stagePatch', {
+            sessionId,
+            path: selected.path,
+            direction,
+            untracked: selected.untracked === true,
+            expectedIndexTree: diffMetaRef.current.indexTree,
+            expectedWorktreeHash: diffMetaRef.current.worktreeHash ?? undefined,
+            hunks: payload.hunks,
+          })
+          setPatchSel({})
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          if (thrown.code === 'patch-stale' || thrown.code === 'nothing-selected' || thrown.code === 'binary-file') {
+            setNotice(t('patch.stale'))
+            void loadChanges()
+          } else {
+            setActionError({ code: thrown.code, message: thrown.message })
+          }
+        } finally {
+          setPatchBusy(false)
+        }
+      }
+
+      // ── A3: three-way conflict editor ────────────────────────────────────
+
+      const [conflictInfo, setConflictInfo] = React.useState(null)
+      const [conflictBusy, setConflictBusy] = React.useState(null)
+      const [conflictDraft, setConflictDraft] = React.useState(null)
+      const [conflictTab, setConflictTab] = React.useState('result')
+      const [openConflicts, setOpenConflicts] = React.useState({})
+
+      const conflictRow = (item) => {
+        const open = openConflicts[item.path] === true
+        const rowMarkerCount = item.markerCount ?? 0
+        return h('div', { key: item.path, className: 'gct-conflict' },
+          h('div', {
+            className: 'gct-config-row',
+            role: 'button',
+            tabIndex: 0,
+            onClick: () => setOpenConflicts((previous) => Object.assign({}, previous, { [item.path]: previous[item.path] !== true })),
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              setOpenConflicts((previous) => Object.assign({}, previous, { [item.path]: previous[item.path] !== true }))
+            },
+          },
+          h('span', { className: 'gdt-dir-caret' }, open ? '▾' : '▸'),
+          h('button', {
+            type: 'button',
+            className: 'gdt-path gdt-link',
+            onClick: (event) => {
+              event.stopPropagation()
+              openConflictFile(item.path)
+            },
+          }, item.path),
+          h('span', { className: 'gdt-summary' }, conflictTypeLabel(item.type)),
+          rowMarkerCount > 0 ? h('span', { className: 'gdt-summary', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, t('conflict.markers', { n: rowMarkerCount })) : null),
+          open ? h(ConflictEditor, {
+            item,
+            tab: conflictTab,
+            onTab: setConflictTab,
+            draft: conflictDraft,
+            onDraft: setConflictDraft,
+            busy: conflictBusy,
+            onAccept: async (side) => {
+              if (conflictBusy !== null) return
+              setConflictBusy(side)
+              setActionError(null)
+              try {
+                await callApi('conflictAccept', { sessionId, path: item.path, side })
+                setConflictDraft(null)
+                reload()
+                notifyRepoChanged(sessionId)
+              } catch (thrown) {
+                setActionError({ code: thrown.code, message: thrown.message })
+              } finally {
+                setConflictBusy(null)
+              }
+            },
+            onSave: async () => {
+              if (conflictBusy !== null || conflictDraft === null) return
+              setConflictBusy('save')
+              setActionError(null)
+              try {
+                await callApi('conflictSave', { sessionId, path: item.path, content: conflictDraft })
+                setConflictDraft(null)
+                reload()
+                notifyRepoChanged(sessionId)
+              } catch (thrown) {
+                setActionError({ code: thrown.code, message: thrown.message })
+              } finally {
+                setConflictBusy(null)
+              }
+            },
+          }) : null)
+      }
+
 
       const reload = () => {
         setNotice(null)
@@ -3761,6 +4068,25 @@ window.__ModuleLoader__.load({
           : left.path.localeCompare(right.path)))
       const mergeInProgress = repoInfo !== null && repoInfo !== undefined && repoInfo.operation === 'merge'
       const hasConflicts = conflictPaths.length > 0
+
+      React.useEffect(() => {
+        if (sessionId === undefined || !mergeInProgress) {
+          setConflictInfo(null)
+          return undefined
+        }
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('conflictInfo', { sessionId })
+            if (!cancelled) setConflictInfo(value.conflicts ?? [])
+          } catch {
+            if (!cancelled) setConflictInfo([])
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, mergeInProgress, reloadTick])
       const branchLabel = repoInfo === null || repoInfo === undefined
         ? ''
         : repoInfo.detached === true
@@ -3794,6 +4120,16 @@ window.__ModuleLoader__.load({
             setSelected(null)
           },
         }, t('tab.scope.worktree')),
+        h('button', {
+          type: 'button',
+          className: 'gdt-tab',
+          'data-active': scope === 'staged' ? 'true' : 'false',
+          onClick: () => {
+            setScope('staged')
+            setBaseSel(null)
+            setSelected(null)
+          },
+        }, t('tab.scope.staged')),
         h('button', {
           type: 'button',
           className: 'gdt-tab',
@@ -3880,7 +4216,11 @@ window.__ModuleLoader__.load({
       }
 
       const stagedCount = files.filter((file) => file.staged === true).length
-      const worktreeScope = scope === 'worktree'
+      const worktreeScope = scope === 'worktree' || scope === 'staged'
+      /** Partial staging only applies to the index views. */
+      const patchDirection = scope === 'staged' ? 'unstage' : 'stage'
+      const patchEditable = diff !== null && diff.binary !== true && (scope === 'worktree' || scope === 'staged')
+      const patchSelection = patchSelectionPayload()
 
       const toggleStage = (file) => {
         if (file.staged === true) void unstagePaths([file.path], false)
@@ -3933,7 +4273,7 @@ window.__ModuleLoader__.load({
               sessionId,
               scope,
               scope === 'branch' ? baseValue : null,
-              files.map((entry) => ({ path: entry.path, status: entry.status, untracked: entry.status === '?' })),
+              visibleFiles.map((entry) => ({ path: entry.path, status: entry.status, untracked: entry.status === '?' })),
               index,
             )
           },
@@ -3975,9 +4315,9 @@ window.__ModuleLoader__.load({
       }
 
       const treeRows = (() => {
-        if (fileView !== 'tree' || files.length === 0) return null
+        if (fileView !== 'tree' || visibleFiles.length === 0) return null
         const root = { children: new Map() }
-        for (const file of files) {
+        for (const file of visibleFiles) {
           const parts = file.path.split('/')
           let node = root
           for (let partIndex = 0; partIndex < parts.length - 1; partIndex += 1) {
@@ -4005,7 +4345,7 @@ window.__ModuleLoader__.load({
         return rows
       })()
       const listRows = treeRows === null
-        ? files.map((file) => ({ type: 'file', file, depth: 0 }))
+        ? visibleFiles.map((file) => ({ type: 'file', file, depth: 0 }))
         : treeRows
       const FILE_ROW_HEIGHT = 28
       const virtualized = listRows.length > 80
@@ -4029,10 +4369,10 @@ window.__ModuleLoader__.load({
           h('span', { className: 'gdt-dir-caret' }, row.open ? '▾' : '▸'),
           h('span', { className: 'gdt-path' }, row.name))
         }
-        return fileRow(row.file, files.indexOf(row.file), row.depth)
+        return fileRow(row.file, visibleFiles.indexOf(row.file), row.depth)
       })
 
-      const fileList = files.length === 0 ? null : h('div', {
+      const fileList = visibleFiles.length === 0 ? null : h('div', {
         className: 'gdt-files',
         onScroll: (event) => {
           if (virtualized) setFileScrollTop(event.currentTarget.scrollTop)
@@ -4287,20 +4627,7 @@ window.__ModuleLoader__.load({
               }, conflictSort === 'path' ? t('sync.sortPath') : t('sync.sortType'))),
             visibleConflicts.length === 0
               ? h('div', { className: 'gdt-note' }, t('panel.empty'))
-              : visibleConflicts.map((item) => h('div', { key: item.path, className: 'gct-config-row' },
-                h('button', {
-                  type: 'button',
-                  className: 'gdt-path gdt-link',
-                  title: item.path,
-                  onClick: () => openConflictFile(item.path),
-                }, item.path),
-                h('span', { className: 'gdt-summary' }, conflictTypeLabel(item.type)),
-                h('button', {
-                  type: 'button',
-                  className: 'gdt-btn',
-                  disabled: mergeBusy !== null,
-                  onClick: () => void resolveConflict(item.path),
-                }, t('merge.rowResolve')))))
+              : (conflictInfo ?? visibleConflicts).map((item) => conflictRow(item)))
           : null,
         abortConfirm && mergeInProgress
           ? h('div', { className: 'gdt-note' },
@@ -4600,8 +4927,17 @@ window.__ModuleLoader__.load({
           const diffRowCount = diff.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0)
           const capped = diffRowCount > 1200 && !diffExpanded
           const shownHunks = capped ? limitDiffHunks(diff.hunks, 1200) : diff.hunks
+          const diffProps = {
+            hunks: shownHunks,
+            wrap,
+            lang: diffLang,
+            editable: patchEditable && view === 'unified',
+            isLineSelected,
+            onToggleLine: toggleLineSelection,
+            onHunkSelect: selectHunkLines,
+          }
           diffBody = h('div', { className: 'gdt-scroll' },
-            view === 'side' ? h(SideDiff, { hunks: shownHunks, wrap, lang: diffLang }) : h(UnifiedDiff, { hunks: shownHunks, wrap, lang: diffLang }),
+            view === 'side' ? h(SideDiff, diffProps) : h(UnifiedDiff, diffProps),
             capped
               ? h('div', { className: 'gdt-note' }, h('button', {
                 type: 'button',
@@ -4613,8 +4949,30 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const patchBar = !patchEditable || selected === null
+        ? null
+        : h('div', { className: 'gdt-patch-bar' },
+          h('span', { className: 'gdt-summary' }, t('patch.title', {
+            n: patchSelection.count,
+            dir: patchDirection === 'unstage' ? t('stage.unstage') : t('stage.stage'),
+          })),
+          h('span', { className: 'gdt-spacer' }),
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: patchBusy || patchSelection.count === 0,
+            onClick: () => void applyPatchSelection(patchDirection),
+          }, patchBusy ? t('sync.busy') : t('patch.apply')),
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn',
+            disabled: patchBusy || patchSelection.count === 0,
+            onClick: clearPatchSelection,
+          }, t('patch.clear')))
+
       const diffPane = h('div', { className: 'gdt-diff' },
         selected === null ? h('div', { className: 'gdt-empty' }, t('tab.selectFile')) : diffToolbar,
+        patchBar,
         diffBody)
 
       return h('div', { className: 'gdt-root', ref: rootRef, 'data-narrow': narrow ? 'true' : 'false' },

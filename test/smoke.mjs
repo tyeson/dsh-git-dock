@@ -292,6 +292,41 @@ check('squash result reported', squashed.status === 'squashed', squashed.status)
 check('squash leaves staged changes', squashed.repo.changes.staged > 0, squashed.repo.changes)
 git(repoDir, 'reset', '--hard', '-q')
 
+console.log('A3 partial staging')
+const partialPath = 'partial.txt'
+writeFileSync(join(repoDir, partialPath), ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'].join('\n') + '\n')
+git(repoDir, 'add', partialPath)
+git(repoDir, 'commit', '-qm', 'partial base')
+writeFileSync(join(repoDir, partialPath), ['ONE', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'NINE', 'ten'].join('\n') + '\n')
+const partialDiff = unwrap(await callApi(handler, 'diff', { sessionId: SESSION, scope: 'worktree', path: partialPath }))
+check('partial diff exposes two hunks', partialDiff.hunks.length === 2, partialDiff.hunks.length)
+check('diff carries the index and worktree hashes', typeof partialDiff.indexTree === 'string' && typeof partialDiff.worktreeHash === 'string', partialDiff)
+const stalePatch = await callApi(handler, 'stagePatch', {
+  sessionId: SESSION, path: partialPath, direction: 'stage',
+  expectedIndexTree: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+  expectedWorktreeHash: partialDiff.worktreeHash,
+  hunks: [{ hunk: 0 }],
+})
+check('stale index is refused', stalePatch.status === 409 && stalePatch.body.error.code === 'patch-stale', stalePatch.body)
+const firstHunkOnly = unwrap(await callApi(handler, 'stagePatch', {
+  sessionId: SESSION, path: partialPath, direction: 'stage',
+  expectedIndexTree: partialDiff.indexTree,
+  expectedWorktreeHash: partialDiff.worktreeHash,
+  hunks: [{ hunk: 0 }],
+}))
+check('one hunk was staged', firstHunkOnly.applied.hunks === 1 && firstHunkOnly.applied.lines > 0, firstHunkOnly.applied)
+check('the file still has an unstaged remainder', git(repoDir, 'diff', '--name-only', '--', partialPath) === partialPath, git(repoDir, 'diff', '--name-only', '--', partialPath))
+const stagedDiff = unwrap(await callApi(handler, 'diff', { sessionId: SESSION, scope: 'staged', path: partialPath }))
+check('staged diff shows the staged hunk', stagedDiff.scope === 'staged' && stagedDiff.hunks.length >= 1, stagedDiff.scope)
+const unstagePatch = unwrap(await callApi(handler, 'unstagePatch', {
+  sessionId: SESSION, path: partialPath, direction: 'unstage',
+  expectedIndexTree: stagedDiff.indexTree,
+  hunks: [{ hunk: 0 }],
+}))
+check('unstage removes the patch from the index', unstagePatch.applied.direction === 'unstage' && git(repoDir, 'diff', '--cached', '--name-only', '--', partialPath) === '', git(repoDir, 'diff', '--cached', '--name-only', '--', partialPath))
+git(repoDir, 'checkout', '--', partialPath)
+check('partial staging left the worktree intact', git(repoDir, 'status', '--porcelain', '--', partialPath) === '', git(repoDir, 'status', '--porcelain', '--', partialPath))
+
 console.log('P2 conflicts')
 git(repoDir, 'switch', '-q', 'main')
 writeFileSync(join(repoDir, 'shared.txt'), 'base\n')
@@ -343,6 +378,30 @@ const syncLogValue = unwrap(await callApi(handler, 'syncLog', { sessionId: SESSI
 check('sync log records both phases', Array.isArray(syncLogValue.entries) && syncLogValue.entries.some((entry) => entry.pull !== undefined) && syncLogValue.entries.some((entry) => entry.push !== undefined), syncLogValue.entries?.length)
 const noMerge = await callApi(handler, 'merge.abort', { sessionId: SESSION })
 check('abort refuses without a merge', noMerge.status === 409 && noMerge.body.error.code === 'no-merge', noMerge.body)
+
+console.log('A3 three-way conflict editor')
+writeFileSync(join(repoDir, 'editor.txt'), 'base\n')
+git(repoDir, 'add', 'editor.txt')
+git(repoDir, 'commit', '-qm', 'editor base')
+git(repoDir, 'switch', '-qc', 'editor-side')
+writeFileSync(join(repoDir, 'editor.txt'), 'side\n')
+git(repoDir, 'add', 'editor.txt')
+git(repoDir, 'commit', '-qm', 'editor side')
+git(repoDir, 'switch', '-q', 'main')
+writeFileSync(join(repoDir, 'editor.txt'), 'main\n')
+git(repoDir, 'add', 'editor.txt')
+git(repoDir, 'commit', '-qm', 'editor main')
+const editorPreview = unwrap(await callApi(handler, 'merge.preview', { sessionId: SESSION, source: 'editor-side' }))
+unwrap(await callApi(handler, 'merge.apply', { sessionId: SESSION, confirmToken: editorPreview.confirmToken, confirmed: true }))
+const conflictInfoValue = unwrap(await callApi(handler, 'conflictInfo', { sessionId: SESSION }))
+check('conflict info lists the file', conflictInfoValue.conflicts.length === 1 && conflictInfoValue.conflicts[0].path === 'editor.txt', conflictInfoValue.conflicts)
+const conflictRow = conflictInfoValue.conflicts[0]
+check('conflict info carries all four versions', conflictRow.base?.content.includes('base') && conflictRow.ours?.content.includes('main') && conflictRow.theirs?.content.includes('side'), conflictRow)
+check('conflict info counts markers', typeof conflictRow.markerCount === 'number' && conflictRow.markerCount > 0, conflictRow.markerCount)
+const accepted = unwrap(await callApi(handler, 'conflictAccept', { sessionId: SESSION, path: 'editor.txt', side: 'theirs' }))
+check('accepting incoming clears the conflict', accepted.conflicts.length === 0 && readFileSync(join(repoDir, 'editor.txt'), 'utf8').includes('side'), accepted.conflicts)
+const editorCompleted = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
+check('three-way resolution completes the merge', editorCompleted.repo.operation === 'none', editorCompleted.repo.operation)
 
 console.log('P2 model tool')
 check('git_branch tool registered', tools.length === 1 && tools[0].name === 'git_branch', tools.map((tool) => tool.name))
