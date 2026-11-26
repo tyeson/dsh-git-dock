@@ -14,10 +14,10 @@
  * @module dsh-git-dock
  */
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { appendFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 export const name = 'dsh-git-dock'
 
@@ -86,16 +86,18 @@ function sendJson(res, status, value) {
 }
 
 /** Map a thrown value onto the wire error envelope. */
-function sendError(res, error) {
+function sendError(res, error, requestId) {
+  const id = requestId ?? randomUUID()
   if (error instanceof ApiError) {
     sendJson(res, error.status, {
       ok: false,
+      requestId: id,
       error: { code: error.code, message: error.message, details: error.details },
     })
     return
   }
   const message = error instanceof Error ? error.message : String(error)
-  sendJson(res, 500, { ok: false, error: { code: 'internal', message } })
+  sendJson(res, 500, { ok: false, requestId: id, error: { code: 'internal', message } })
 }
 
 /** Read a bounded JSON body; empty bodies become `{}`. */
@@ -385,12 +387,15 @@ function conflictTypeOf(x, y) {
  */
 async function readRepoState(ctx, sessionId, signal) {
   const { session, cwd } = resolveSessionCwd(ctx, sessionId)
+  const registered = sessionId === undefined || sessionId === null ? undefined : activeRepoBySession.get(sessionId)
+  const baseCwd = typeof registered === 'string' && registered !== '' ? registered : cwd
   let repoRoot
   try {
-    repoRoot = await gitText(cwd, ['rev-parse', '--show-toplevel'], { signal })
+    repoRoot = await gitText(baseCwd, ['rev-parse', '--show-toplevel'], { signal })
   } catch (error) {
     if (error instanceof ApiError && error.code === 'not-repo') {
-      throw new ApiError('not-repo', 'session directory is not a git repository', 409, { cwd })
+      if (baseCwd !== cwd) activeRepoBySession.delete(sessionId)
+      throw new ApiError('not-repo', 'session directory is not a git repository', 409, { cwd: baseCwd })
     }
     throw error
   }
@@ -729,11 +734,16 @@ async function readChanges(ctx, body, signal) {
     const rows = parseStatusRows(statusRaw)
     files = await Promise.all(rows.map(async (row) => {
       const stats = row.untracked === true ? await sizeUntrackedFile(state.repoRoot, row.path) : counts.get(row.path)
+      const indexLetter = row.untracked === true ? '?' : (row.x !== undefined && row.x !== '.' && row.x !== ' ' ? row.x : null)
+      const worktreeLetter = row.untracked === true ? '?' : (row.y !== undefined && row.y !== '.' && row.y !== ' ' ? row.y : null)
       return {
         path: row.path,
         origPath: typeof row.origPath === 'string' ? row.origPath : null,
         status: statusLetter(row),
+        indexStatus: indexLetter,
+        worktreeStatus: worktreeLetter,
         staged: row.x !== undefined && row.x !== '.' && row.x !== ' ',
+        unstaged: row.y !== undefined && row.y !== '.' && row.y !== ' ',
         unstaged: row.y !== undefined && row.y !== '.' && row.y !== ' ',
         conflict: row.conflict === true,
         additions: stats === undefined ? null : stats.additions,
@@ -753,6 +763,8 @@ async function readChanges(ctx, body, signal) {
         path: row.path,
         origPath: row.origPath,
         status: row.status,
+        indexStatus: row.status,
+        worktreeStatus: null,
         staged: true,
         unstaged: false,
         conflict: false,
@@ -1012,6 +1024,7 @@ async function abortMerge(ctx, body, signal) {
     const before = await readRepoState(ctx, body.sessionId, signal)
     if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409)
     await runGit(before.repoRoot, ['merge', '--abort'], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'merge.abort', repoRoot: before.repoRoot, branch: before.branch, result: 'ok' })
     return { repo: await readRepoState(ctx, body.sessionId, signal) }
   })
 }
@@ -1036,7 +1049,9 @@ async function completeMerge(ctx, body, signal) {
         detail: result.stderr.slice(0, 4_000),
       })
     }
-    return { repo: await readRepoState(ctx, body.sessionId, signal) }
+    const committed = await readRepoState(ctx, body.sessionId, signal)
+    await appendAudit({ action: 'merge.complete', repoRoot: before.repoRoot, branch: before.branch, result: 'ok' })
+    return { repo: committed }
   })
 }
 
@@ -1289,7 +1304,15 @@ async function discardPaths(ctx, body, signal) {
     if (result.code !== 0 && !clean) {
       throw new ApiError('discard-failed', firstLine(result.stderr) || 'git stash failed', 400, { detail: result.stderr.slice(0, 4_000) })
     }
-    return { repo: await readRepoState(ctx, body.sessionId, signal), backup, stashed: !clean, message: `dsh-git-dock discard ${stamp}` }
+    const repo = await readRepoState(ctx, body.sessionId, signal)
+    await appendAudit({
+      action: 'discard',
+      repoRoot: before.repoRoot,
+      branch: before.branch,
+      target: paths,
+      result: clean ? 'no-op' : 'stashed',
+    })
+    return { repo, backup, stashed: !clean, message: `dsh-git-dock discard ${stamp}` }
   })
 }
 
@@ -1315,6 +1338,7 @@ async function undoDiscard(ctx, body, signal) {
       throw new ApiError('discard-undo-failed', firstLine(apply.stderr) || 'git stash apply failed', 409, { detail: apply.stderr.slice(0, 4_000) })
     }
     await runGit(before.repoRoot, ['stash', 'drop', ref], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    await appendAudit({ action: 'discard.undo', repoRoot: before.repoRoot, branch: before.branch, target: [ref], result: 'restored' })
     return { repo: await readRepoState(ctx, body.sessionId, signal), restored: ref }
   })
 }
@@ -1379,6 +1403,9 @@ async function commitChanges(ctx, body, signal) {
     const after = await readRepoState(ctx, body.sessionId, signal)
     const sha = (await gitText(after.repoRoot, ['rev-parse', '--short', 'HEAD'], { signal })).trim()
     const subject = firstLine(await gitText(after.repoRoot, ['log', '-1', '--format=%s'], { signal }))
+    if (amend) {
+      await appendAudit({ action: 'commit.amend', repoRoot: after.repoRoot, branch: after.branch, target: sha, result: 'ok' })
+    }
     return { repo: after, commit: { sha, subject, amend } }
   })
 }
@@ -1549,6 +1576,201 @@ function dshHomePath() {
 /** Plugin-owned commit-convention store path. */
 function commitConfigPath() {
   return join(dshHomePath(), 'dsh-git-dock', 'commit-convention.json')
+}
+
+// ── A0: audit log for dangerous operations ─────────────────────────────────
+
+/** Path of the append-only audit log. */
+function auditLogPath() {
+  return join(dshHomePath(), 'dsh-git-dock', 'audit.jsonl')
+}
+
+/**
+ * Append one audit record. Failure to write must never break the operation.
+ *
+ * @param {object} entry - `{ action, repoRoot, branch?, target?, result?, details? }`.
+ * @returns {Promise<void>} resolves after the best-effort append.
+ */
+async function appendAudit(entry) {
+  try {
+    const file = auditLogPath()
+    await mkdir(dirname(file), { recursive: true })
+    const record = Object.assign({ at: new Date().toISOString(), id: randomUUID() }, entry)
+    await appendFile(file, `${JSON.stringify(record)}\n`, 'utf8')
+  } catch {
+    // Auditing is best effort and never blocks the Git operation.
+  }
+}
+
+// ── A1: repository registry and per-session active repository ──────────────
+
+/** sessionId → absolute repository root selected for that session. */
+const activeRepoBySession = new Map()
+
+/** Path of the repository registry file. */
+function repositoriesFile() {
+  return join(dshHomePath(), 'dsh-git-dock', 'repositories.json')
+}
+
+/** Stable id for one canonical repository path. */
+function repositoryIdFor(path) {
+  return createHash('sha1').update(path).digest('hex').slice(0, 12)
+}
+
+/** Read the registry; a missing or broken file reads as empty. */
+async function loadRepositoryEntries() {
+  try {
+    const parsed = JSON.parse(await readFile(repositoriesFile(), 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed.repositories) !== true) return []
+    return parsed.repositories.filter((entry) => entry !== null && typeof entry === 'object'
+      && typeof entry.id === 'string' && entry.id !== ''
+      && typeof entry.path === 'string' && entry.path !== '')
+  } catch {
+    return []
+  }
+}
+
+/** Persist the registry through a temporary file and a rename. */
+async function saveRepositoryEntries(entries) {
+  const file = repositoriesFile()
+  await mkdir(dirname(file), { recursive: true })
+  const temp = `${file}.${randomUUID()}.tmp`
+  await writeFile(temp, JSON.stringify({ repositories: entries }, null, 2), 'utf8')
+  await rename(temp, file)
+}
+
+/**
+ * Validate one candidate path and canonicalize it to a repository root.
+ *
+ * @param {unknown} candidate - user-supplied path.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<{ id: string, path: string }>} canonical identity.
+ */
+async function validateRepositoryPath(candidate, signal) {
+  if (typeof candidate !== 'string' || candidate.trim() === '') {
+    throw new ApiError('bad-request', 'a repository path is required', 400)
+  }
+  if (candidate.includes('\0')) throw new ApiError('bad-request', 'the repository path contains an invalid character', 400)
+  let absolute
+  try {
+    absolute = resolve(candidate.trim())
+  } catch {
+    throw new ApiError('bad-request', 'the repository path is not valid', 400)
+  }
+  let canonical
+  try {
+    canonical = await realpath(absolute)
+  } catch {
+    throw new ApiError('path-missing', 'the repository path does not exist', 404, { path: absolute })
+  }
+  const info = await stat(canonical).catch(() => null)
+  if (info === null || info.isDirectory() !== true) {
+    throw new ApiError('not-directory', 'the repository path is not a directory', 400, { path: canonical })
+  }
+  let repoRoot
+  try {
+    repoRoot = await gitText(canonical, ['rev-parse', '--show-toplevel'], { signal })
+  } catch {
+    throw new ApiError('not-repo', 'the directory is not a git repository', 409, { path: canonical })
+  }
+  const rootInfo = await stat(repoRoot).catch(() => null)
+  if (rootInfo === null || rootInfo.isDirectory() !== true) {
+    throw new ApiError('not-repo', 'the repository root is unavailable', 409, { path: repoRoot })
+  }
+  return { id: repositoryIdFor(repoRoot), path: repoRoot }
+}
+
+/** List registry entries with existence and active flags for one session. */
+async function listRepositories(sessionId) {
+  const entries = await loadRepositoryEntries()
+  const active = sessionId === undefined || sessionId === null ? undefined : activeRepoBySession.get(sessionId)
+  const rows = []
+  for (const entry of entries) {
+    const info = await stat(entry.path).catch(() => null)
+    rows.push({
+      id: entry.id,
+      path: entry.path,
+      name: typeof entry.name === 'string' && entry.name !== '' ? entry.name : basename(entry.path),
+      createdAt: entry.createdAt ?? null,
+      lastOpenedAt: entry.lastOpenedAt ?? null,
+      exists: info !== null && info.isDirectory() === true,
+      active: active !== undefined && active === entry.path,
+    })
+  }
+  rows.sort((left, right) => (right.lastOpenedAt ?? 0) - (left.lastOpenedAt ?? 0))
+  return rows
+}
+
+/**
+ * Register (or refresh) one repository and make it the session's active one.
+ *
+ * @returns {Promise<{ repository: object, repositories: object[] }>} registry view.
+ */
+async function addRepository(sessionId, candidate, signal) {
+  const validated = await validateRepositoryPath(candidate, signal)
+  const entries = await loadRepositoryEntries()
+  const now = Date.now()
+  const index = entries.findIndex((entry) => entry.id === validated.id)
+  if (index >= 0) {
+    entries[index] = Object.assign({}, entries[index], { path: validated.path, name: basename(validated.path), lastOpenedAt: now })
+  } else {
+    entries.push({ id: validated.id, path: validated.path, name: basename(validated.path), createdAt: now, lastOpenedAt: now })
+  }
+  await saveRepositoryEntries(entries)
+  if (sessionId !== undefined && sessionId !== null) activeRepoBySession.set(sessionId, validated.path)
+  const repositories = await listRepositories(sessionId)
+  return { repository: repositories.find((entry) => entry.id === validated.id) ?? null, repositories }
+}
+
+/**
+ * Select an existing registry entry or a path, making it active for the session.
+ *
+ * @returns {Promise<{ repository: object|null, repositories: object[] }>} registry view.
+ */
+async function selectRepository(sessionId, idOrPath, signal) {
+  if (typeof idOrPath !== 'string' || idOrPath.trim() === '') {
+    throw new ApiError('bad-request', 'repositoryId or path is required', 400)
+  }
+  const entries = await loadRepositoryEntries()
+  const known = entries.find((entry) => entry.id === idOrPath || entry.path === idOrPath)
+  const validated = await validateRepositoryPath(known === undefined ? idOrPath : known.path, signal)
+  activeRepoBySession.set(sessionId, validated.path)
+  const now = Date.now()
+  const index = entries.findIndex((entry) => entry.id === validated.id)
+  if (index >= 0) {
+    entries[index] = Object.assign({}, entries[index], { path: validated.path, lastOpenedAt: now })
+  } else {
+    entries.push({ id: validated.id, path: validated.path, name: basename(validated.path), createdAt: now, lastOpenedAt: now })
+  }
+  await saveRepositoryEntries(entries)
+  const repositories = await listRepositories(sessionId)
+  return { repository: repositories.find((entry) => entry.id === validated.id) ?? null, repositories }
+}
+
+/** Remove one registry entry; the directory on disk is left alone. */
+async function removeRepository(sessionId, id) {
+  const entries = await loadRepositoryEntries()
+  const next = entries.filter((entry) => entry.id !== id)
+  if (next.length !== entries.length) await saveRepositoryEntries(next)
+  const active = activeRepoBySession.get(sessionId)
+  if (active !== undefined && next.every((entry) => entry.path !== active)) activeRepoBySession.delete(sessionId)
+  return { repositories: await listRepositories(sessionId) }
+}
+
+/** Parse `git remote -v` output into remote rows. */
+async function readRemotes(repoRoot, signal) {
+  const raw = await gitText(repoRoot, ['remote', '-v'], { signal })
+  const map = new Map()
+  for (const line of raw.split('\n')) {
+    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(line.trim())
+    if (match === null) continue
+    const [, name, url, kind] = match
+    const row = map.get(name) ?? { name, fetchUrl: '', pushUrl: '' }
+    if (kind === 'fetch') row.fetchUrl = url
+    else row.pushUrl = url
+    map.set(name, row)
+  }
+  return [...map.values()].map((row) => Object.assign({}, row, { pushUrl: row.pushUrl === '' ? row.fetchUrl : row.pushUrl }))
 }
 
 /** Sanitize one saved commit config; null when nothing usable remains. */
@@ -2185,8 +2407,10 @@ async function pushRemote(ctx, body, signal) {
     if (result.code !== 0) {
       const detail = result.stderr
       const rejected = /rejected|non-fast-forward|fetch first|behind/i.test(detail)
+      await appendAudit({ action: 'push', repoRoot: before.repoRoot, branch: before.branch, target: args.slice(-1), result: rejected ? 'rejected' : 'failed' })
       throw new ApiError(rejected ? 'push-rejected' : 'push-failed', firstLine(detail) || 'git push failed', 409, { detail: detail.slice(0, 4_000) })
     }
+    await appendAudit({ action: 'push', repoRoot: before.repoRoot, branch: before.branch, target: args.slice(-1), result: 'pushed' })
     return { repo: await readRepoState(ctx, body.sessionId, signal), setUpstream: upstream === null || upstream === '', upstream: upstream ?? null }
   })
 }
@@ -2558,6 +2782,15 @@ async function assertBranchName(repoRoot, branch, signal) {
 
 /** Resolve the repository root for a session without reading the whole state. */
 async function resolveRepoRoot(ctx, sessionId, signal) {
+  const active = sessionId === undefined || sessionId === null ? undefined : activeRepoBySession.get(sessionId)
+  if (typeof active === 'string' && active !== '') {
+    try {
+      return await gitText(active, ['rev-parse', '--show-toplevel'], { signal })
+    } catch {
+      // The registered repository moved or disappeared: fall back to the session cwd.
+      activeRepoBySession.delete(sessionId)
+    }
+  }
   const { cwd } = resolveSessionCwd(ctx, sessionId)
   try {
     return await gitText(cwd, ['rev-parse', '--show-toplevel'], { signal })
@@ -2791,6 +3024,55 @@ const API = {
       return { repo: after, branches: await readBranches(after.repoRoot, signal) }
     })
   },
+
+  // ── A1: repository registry ─────────────────────────────────────────────
+
+  /** Registered repositories plus which one this session is using. */
+  async repositoryList(ctx, body) {
+    return { repositories: await listRepositories(body.sessionId) }
+  },
+
+  /** Register one repository path and make it active for this session. */
+  async repositoryAdd(ctx, body, signal) {
+    return addRepository(body.sessionId, body.path, signal)
+  },
+
+  /** Switch the session's active repository (registry id or a path). */
+  async repositorySelect(ctx, body, signal) {
+    const selected = await selectRepository(body.sessionId, body.repositoryId ?? body.path, signal)
+    return Object.assign({}, selected, { repo: await readRepoState(ctx, body.sessionId, signal) })
+  },
+
+  /** Remove one registry entry; the directory itself is never touched. */
+  async repositoryRemove(ctx, body) {
+    if (typeof body.repositoryId !== 'string' || body.repositoryId === '') {
+      throw new ApiError('bad-request', 'repositoryId is required', 400)
+    }
+    return removeRepository(body.sessionId, body.repositoryId)
+  },
+
+  /** Check one path without registering it. */
+  async repositoryValidate(ctx, body, signal) {
+    try {
+      const validated = await validateRepositoryPath(body.path, signal)
+      return { valid: true, id: validated.id, path: validated.path }
+    } catch (error) {
+      if (error instanceof ApiError) return { valid: false, code: error.code, message: error.message }
+      throw error
+    }
+  },
+
+  /** Configured remotes of the session's repository. */
+  async repositoryRemotes(ctx, body, signal) {
+    const state = await readRepoState(ctx, body.sessionId, signal)
+    return { remotes: await readRemotes(state.repoRoot, signal) }
+  },
+
+  /** Drop the registry override and go back to the session's own directory. */
+  async repositorySession(ctx, body, signal) {
+    activeRepoBySession.delete(body.sessionId)
+    return { repo: await readRepoState(ctx, body.sessionId, signal), repositories: await listRepositories(body.sessionId) }
+  },
 }
 
 /**
@@ -2825,23 +3107,24 @@ function fence(ctx, req) {
  * @param {import('node:http').ServerResponse} res - response.
  */
 async function handleApi(ctx, req, res) {
+  const requestId = randomUUID()
   if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
-    sendError(res, new ApiError('method-error', 'method not allowed', 405))
+    sendError(res, new ApiError('method-error', 'method not allowed', 405), requestId)
     return
   }
   if (!fence(ctx, req)) {
-    sendError(res, new ApiError('forbidden', 'forbidden', 403))
+    sendError(res, new ApiError('forbidden', 'forbidden', 403), requestId)
     return
   }
   const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname
   const method = pathname.startsWith(`${ROUTE_PREFIX}/`) ? pathname.slice(ROUTE_PREFIX.length + 1) : ''
   if (method === '' || method.includes('/')) {
-    sendError(res, new ApiError('not-found', 'unknown api method', 404))
+    sendError(res, new ApiError('not-found', 'unknown api method', 404), requestId)
     return
   }
   const handler = Object.hasOwn(API, method) ? API[method] : undefined
   if (typeof handler !== 'function') {
-    sendError(res, new ApiError('not-found', `unknown api method: ${method}`, 404))
+    sendError(res, new ApiError('not-found', `unknown api method: ${method}`, 404), requestId)
     return
   }
   const controller = new AbortController()
@@ -2850,9 +3133,9 @@ async function handleApi(ctx, req, res) {
   try {
     const body = await readJsonBody(req)
     const value = await handler(ctx, body, controller.signal)
-    if (!controller.signal.aborted) sendJson(res, 200, { ok: true, value })
+    if (!controller.signal.aborted) sendJson(res, 200, { ok: true, value, requestId })
   } catch (error) {
-    if (!controller.signal.aborted) sendError(res, error)
+    if (!controller.signal.aborted) sendError(res, error, requestId)
   } finally {
     res.off('close', abort)
   }

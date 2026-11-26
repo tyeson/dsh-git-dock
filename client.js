@@ -193,6 +193,8 @@ window.__ModuleLoader__.load({
         'stage.all': '全部暂存',
         'unstage.all': '全部取消暂存',
         'stage.checkbox': '暂存该文件',
+        'stage.indexStatus': '已暂存',
+        'stage.worktreeStatus': '未暂存',
         'discard.action': '丢弃',
         'discard.confirm': '丢弃 {n} 个文件的改动？已跟踪的改动会存进 stash，仍可恢复。',
         'discard.confirmYes': '确认丢弃',
@@ -297,6 +299,21 @@ window.__ModuleLoader__.load({
         'preview.hint': 'Esc 关闭 · ↑/↓ 或 J/K 切换文件',
         'preview.binary': '二进制文件没有文本差异',
         'preview.dblclick': '双击预览',
+        'repo.title': '仓库',
+        'repo.selectHint': '切换或添加已注册仓库',
+        'repo.session': '使用会话目录',
+        'repo.add': '添加',
+        'repo.addPlaceholder': '仓库绝对路径',
+        'repo.remove': '移除',
+        'repo.empty': '还没有注册仓库',
+        'repo.copyPath': '复制路径',
+        'view.tree': '树形',
+        'view.list': '列表',
+        'preview.open': '全屏预览',
+        'stage.stage': '暂存',
+        'stage.unstage': '取消暂存',
+        'diff.expand': '显示全部',
+        'diff.collapse': '收起',
         'tab.side': '并排',
         'tab.wrap': '换行',
         'tab.refresh': '刷新',
@@ -469,6 +486,8 @@ window.__ModuleLoader__.load({
         'stage.all': 'Stage all',
         'unstage.all': 'Unstage all',
         'stage.checkbox': 'Stage this file',
+        'stage.indexStatus': 'Staged',
+        'stage.worktreeStatus': 'Unstaged',
         'discard.action': 'Discard',
         'discard.confirm': 'Discard changes in {n} file(s)? Tracked changes are stashed and can be recovered.',
         'discard.confirmYes': 'Discard',
@@ -573,6 +592,21 @@ window.__ModuleLoader__.load({
         'preview.hint': 'Esc closes · ↑/↓ or J/K switches files',
         'preview.binary': 'Binary file has no textual diff',
         'preview.dblclick': 'Double-click to preview',
+        'repo.title': 'Repository',
+        'repo.selectHint': 'Switch to or register a repository',
+        'repo.session': 'Use the session directory',
+        'repo.add': 'Add',
+        'repo.addPlaceholder': 'Absolute repository path',
+        'repo.remove': 'Remove',
+        'repo.empty': 'No repository is registered yet',
+        'repo.copyPath': 'Copy path',
+        'view.tree': 'Tree',
+        'view.list': 'List',
+        'preview.open': 'Full-screen preview',
+        'stage.stage': 'Stage',
+        'stage.unstage': 'Unstage',
+        'diff.expand': 'Show all',
+        'diff.collapse': 'Collapse',
         'tab.side': 'Side by side',
         'tab.wrap': 'Wrap',
         'tab.refresh': 'Refresh',
@@ -702,6 +736,7 @@ window.__ModuleLoader__.load({
         failure.code = typeof detail.code === 'string' ? detail.code : 'internal'
         failure.details = detail.details
         failure.status = response.status
+        failure.requestId = typeof data.requestId === 'string' ? data.requestId : undefined
         throw failure
       }
       return data.value
@@ -1518,6 +1553,23 @@ window.__ModuleLoader__.load({
         '.gdt-btn:disabled{opacity:.45;cursor:not-allowed}',
         '.gdt-btn:disabled:hover{background:transparent;color:var(--dsw-alias-label-secondary)}',
         '.gdt-btn svg{flex:none}',
+        '.gdt-status-pair{display:inline-flex;gap:2px;width:26px;flex:none}',
+        '.gdt-status[data-kind="worktree"]{opacity:.6}',
+        '.gdt-row-actions{display:inline-flex;gap:2px;opacity:0;transition:opacity .12s ease}',
+        '.gdt-file:hover .gdt-row-actions,.gdt-file:focus-visible .gdt-row-actions{opacity:1}',
+        '.gdt-dir{display:flex;align-items:center;gap:6px;height:28px;padding:0 6px;border-radius:var(--dsw-radius-sm,6px);cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12.5px}',
+        '.gdt-dir:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+        '.gdt-dir-caret{display:inline-block;width:10px;font-size:10px;opacity:.7;flex:none}',
+        '.gdt-popup{position:fixed;z-index:70;width:min(360px,92vw);max-height:min(420px,80vh);overflow:auto;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,8px);box-shadow:var(--dsw-elevation-prominent,none);padding:6px;display:flex;flex-direction:column;gap:2px}',
+        '.gdt-popup-body{display:flex;flex-direction:column;gap:2px;min-width:0}',
+        '.gdt-popup-title{font-weight:600;font-size:12.5px;color:var(--dsw-alias-label-primary);padding:4px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.gdt-popup-row{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--dsw-radius-sm,6px);cursor:pointer;font-size:12.5px;color:var(--dsw-alias-label-primary);min-width:0}',
+        '.gdt-popup-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+        '.gdt-popup-row[data-active="true"]{background:color-mix(in srgb, var(--dsw-alias-link) 12%, transparent)}',
+        '.gdt-popup-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}',
+        '.gdt-popup-sep{height:1px;background:var(--dsw-alias-border-l1);margin:4px 0}',
+        '.gdt-popup-add{display:flex;gap:6px;padding:4px 2px}',
+        '.gdt-popup-add .gdt-input{flex:1;min-width:0;height:24px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:0 6px}',
         '.gdt-spinner{display:inline-block;width:11px;height:11px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gdt-spin .7s linear infinite;flex:none}',
         '@keyframes gdt-spin{to{transform:rotate(360deg)}}',
         '.gdt-status-groups{display:inline-flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}',
@@ -1531,6 +1583,23 @@ window.__ModuleLoader__.load({
         '.gdt-root[data-narrow="true"] .gdt-files{max-height:30%}',
         '.gdt-root[data-narrow="true"] .gdt-diff-path{font-size:11px}',
         '.gdt-root[data-narrow="true"] .gct-file-head{flex-wrap:wrap}',
+        '.gdt-status-pair{display:inline-flex;gap:2px;width:26px;flex:none}',
+        '.gdt-status[data-kind="worktree"]{opacity:.6}',
+        '.gdt-row-actions{display:inline-flex;gap:2px;opacity:0;transition:opacity .12s ease}',
+        '.gdt-file:hover .gdt-row-actions,.gdt-file:focus-visible .gdt-row-actions{opacity:1}',
+        '.gdt-dir{display:flex;align-items:center;gap:6px;height:28px;padding:0 6px;border-radius:var(--dsw-radius-sm,6px);cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12.5px}',
+        '.gdt-dir:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+        '.gdt-dir-caret{display:inline-block;width:10px;font-size:10px;opacity:.7;flex:none}',
+        '.gdt-popup{position:fixed;z-index:70;width:min(360px,92vw);max-height:min(420px,80vh);overflow:auto;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md,8px);box-shadow:var(--dsw-elevation-prominent,none);padding:6px;display:flex;flex-direction:column;gap:2px}',
+        '.gdt-popup-body{display:flex;flex-direction:column;gap:2px;min-width:0}',
+        '.gdt-popup-title{font-weight:600;font-size:12.5px;color:var(--dsw-alias-label-primary);padding:4px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.gdt-popup-row{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--dsw-radius-sm,6px);cursor:pointer;font-size:12.5px;color:var(--dsw-alias-label-primary);min-width:0}',
+        '.gdt-popup-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+        '.gdt-popup-row[data-active="true"]{background:color-mix(in srgb, var(--dsw-alias-link) 12%, transparent)}',
+        '.gdt-popup-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}',
+        '.gdt-popup-sep{height:1px;background:var(--dsw-alias-border-l1);margin:4px 0}',
+        '.gdt-popup-add{display:flex;gap:6px;padding:4px 2px}',
+        '.gdt-popup-add .gdt-input{flex:1;min-width:0;height:24px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:0 6px}',
         '.gdt-select{height:24px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:0 4px;max-width:180px}',
         '.gdt-split{display:flex;flex-direction:column;min-height:0;flex:1}',
         '.gdt-files{max-height:38%;overflow:auto;border-bottom:1px solid var(--dsw-alias-border-l1);padding:2px 6px 6px}',
@@ -2775,6 +2844,20 @@ window.__ModuleLoader__.load({
       return result
     }
 
+    /** Cap the rendered diff rows; the rest stays one click away. */
+    function limitDiffHunks(hunks, limit) {
+      const out = []
+      let used = 0
+      for (const hunk of hunks) {
+        if (used >= limit) break
+        const room = limit - used
+        const lines = hunk.lines.length > room ? hunk.lines.slice(0, room) : hunk.lines
+        out.push(Object.assign({}, hunk, { lines }))
+        used += lines.length
+      }
+      return out
+    }
+
     function UnifiedDiff(props) {
       const rows = []
       props.hunks.forEach((hunk, hunkIndex) => {
@@ -2896,6 +2979,50 @@ window.__ModuleLoader__.load({
       const autoPushRef = React.useRef(false)
       const rootRef = React.useRef(null)
       const [narrow, setNarrow] = React.useState(false)
+      const [repositoryEntries, setRepositoryEntries] = React.useState(null)
+      const [repoMenu, setRepoMenu] = React.useState(null)
+      const [repoInput, setRepoInput] = React.useState('')
+      const [repoBusy, setRepoBusy] = React.useState(false)
+      const [repoError, setRepoError] = React.useState(null)
+      const [fileView, setFileView] = React.useState('list')
+      const [expandedDirs, setExpandedDirs] = React.useState({})
+      const [fileScrollTop, setFileScrollTop] = React.useState(0)
+      const [diffExpanded, setDiffExpanded] = React.useState(false)
+      const popupRef = React.useRef(null)
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('repositoryList', { sessionId })
+            if (!cancelled) setRepositoryEntries(Array.isArray(value.repositories) ? value.repositories : [])
+          } catch {
+            if (!cancelled) setRepositoryEntries([])
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId])
+      React.useEffect(() => {
+        if (repoMenu === null) return undefined
+        const onPointerDown = (event) => {
+          const node = popupRef.current
+          if (node !== null && node.contains(event.target)) return
+          const target = event.target
+          if (target !== null && typeof target.closest === 'function' && target.closest('[data-gdt-repo-btn]') !== null) return
+          setRepoMenu(null)
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') setRepoMenu(null)
+        }
+        document.addEventListener('mousedown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+        }
+      }, [repoMenu])
       const [undoDiscard, setUndoDiscard] = React.useState(null)
       const [abortConfirm, setAbortConfirm] = React.useState(false)
       React.useEffect(() => {
@@ -3117,6 +3244,7 @@ window.__ModuleLoader__.load({
       const baseValue = baseSel ?? (data === null ? '' : data.base ?? '')
 
       const pickFile = (file) => {
+        setDiffExpanded(false)
         setSelected({ path: file.path, untracked: file.status === '?' })
       }
 
@@ -3501,6 +3629,112 @@ window.__ModuleLoader__.load({
       const conflictPaths = repoInfo === null || repoInfo === undefined ? [] : repoInfo.conflictPaths ?? []
       const hasUpstream = repoInfo !== null && repoInfo !== undefined
         && typeof repoInfo.upstream === 'string' && repoInfo.upstream !== ''
+
+      /** Refresh the registered-repository list. */
+      const refreshRepositories = async () => {
+        try {
+          const value = await callApi('repositoryList', { sessionId })
+          setRepositoryEntries(Array.isArray(value.repositories) ? value.repositories : [])
+        } catch {
+          setRepositoryEntries([])
+        }
+      }
+
+      /** Switch the active repository to one registry entry. */
+      const selectRepositoryEntry = async (entry) => {
+        if (repoBusy) return
+        setRepoBusy(true)
+        setRepoError(null)
+        try {
+          const value = await callApi('repositorySelect', { sessionId, repositoryId: entry.id })
+          setRepositoryEntries(Array.isArray(value.repositories) ? value.repositories : [])
+          setRepoMenu(null)
+          setSelected(null)
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setRepoError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setRepoBusy(false)
+        }
+      }
+
+      /** Go back to the session directory when no registry entry is right. */
+      const useSessionRepository = async () => {
+        if (repoBusy) return
+        setRepoBusy(true)
+        setRepoError(null)
+        try {
+          const value = await callApi('repositorySession', { sessionId })
+          setRepositoryEntries(Array.isArray(value.repositories) ? value.repositories : [])
+          setRepoMenu(null)
+          setSelected(null)
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setRepoError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setRepoBusy(false)
+        }
+      }
+
+      /** Register one path typed in the repository menu. */
+      const addRepositoryPath = async () => {
+        if (repoBusy) return
+        setRepoBusy(true)
+        setRepoError(null)
+        try {
+          const value = await callApi('repositoryAdd', { sessionId, path: repoInput })
+          setRepositoryEntries(Array.isArray(value.repositories) ? value.repositories : [])
+          setRepoInput('')
+          setRepoMenu(null)
+          setSelected(null)
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setRepoError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setRepoBusy(false)
+        }
+      }
+
+      /** Remove one registry entry (never the directory). */
+      const removeRepositoryEntry = async (entry) => {
+        if (repoBusy) return
+        setRepoBusy(true)
+        setRepoError(null)
+        try {
+          const value = await callApi('repositoryRemove', { sessionId, repositoryId: entry.id })
+          setRepositoryEntries(Array.isArray(value.repositories) ? value.repositories : [])
+          if (entry.active === true) reload()
+        } catch (thrown) {
+          setRepoError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setRepoBusy(false)
+        }
+      }
+
+      const openRepositoryMenu = (event) => {
+        const rect = event.currentTarget.getBoundingClientRect()
+        setRepoError(null)
+        setRepoMenu({ mode: 'repository', left: rect.left, top: rect.bottom + 6 })
+      }
+
+      const openFileContextMenu = (event, file) => {
+        event.preventDefault()
+        setRepoMenu({ mode: 'file', file, left: event.clientX, top: event.clientY })
+      }
+
+      const copyPath = async (path) => {
+        try {
+          if (typeof navigator === 'undefined' || navigator.clipboard === undefined) throw new Error('no clipboard')
+          await navigator.clipboard.writeText(path)
+          setNotice(t('sync.copied'))
+        } catch {
+          setNotice(t('sync.copyFailed'))
+        }
+        setRepoMenu(null)
+      }
       const conflictTypes = repoInfo === null || repoInfo === undefined
         ? []
         : repoInfo.conflictTypes !== undefined && repoInfo.conflictTypes.length > 0
@@ -3589,7 +3823,19 @@ window.__ModuleLoader__.load({
         h('span', { className: 'gdt-caret' }, '▾'))
         : null
 
+      const repositoryButton = h('button', {
+        type: 'button',
+        className: 'gdt-btn gdt-branch-btn',
+        'data-gdt-repo-btn': '1',
+        title: t('repo.selectHint'),
+        'aria-label': `${t('repo.title')}: ${repoInfo === null || repoInfo === undefined ? '' : repoInfo.repoName}`,
+        onClick: openRepositoryMenu,
+      },
+      h('span', { className: 'gdt-model-name' }, repoInfo === null || repoInfo === undefined ? t('repo.title') : (repoInfo.repoName ?? t('repo.title'))),
+      h('span', { className: 'gdt-caret' }, '▾'))
+
       const toolbar = h('div', { className: 'gdt-bar' },
+        repositoryButton,
         scopeButtons,
         scope === 'branch' ? branchButton : null,
         baseButton,
@@ -3641,7 +3887,31 @@ window.__ModuleLoader__.load({
         else void stagePaths([file.path], false)
       }
 
-      const fileRow = (file, index) => {
+      const fileStatusBadges = (file) => {
+        const indexLetter = file.indexStatus === undefined
+          ? (file.staged === true ? file.status : null)
+          : file.indexStatus
+        const worktreeLetter = file.worktreeStatus === undefined
+          ? (file.unstaged === true ? file.status : null)
+          : file.worktreeStatus
+        const letters = []
+        if (worktreeScope) {
+          if (indexLetter !== null && indexLetter !== undefined && indexLetter !== '') letters.push({ letter: indexLetter, kind: 'index' })
+          if (worktreeLetter !== null && worktreeLetter !== undefined && worktreeLetter !== '') letters.push({ letter: worktreeLetter, kind: 'worktree' })
+          if (letters.length === 0) letters.push({ letter: file.status ?? 'M', kind: 'index' })
+        } else {
+          letters.push({ letter: file.status ?? 'M', kind: 'index' })
+        }
+        return h('span', { className: 'gdt-status-pair' }, letters.map((item, position) => h('span', {
+          key: `${item.kind}-${position}`,
+          className: 'gdt-status',
+          'data-status': item.letter,
+          'data-kind': item.kind,
+          title: t(item.kind === 'index' ? 'stage.indexStatus' : 'stage.worktreeStatus'),
+        }, item.letter)))
+      }
+
+      const fileRow = (file, index, depth = 0) => {
         const active = selected !== null && selected.path === file.path
         const counts = file.binary === true
           ? h('span', null, 'bin')
@@ -3655,6 +3925,7 @@ window.__ModuleLoader__.load({
           'data-active': active ? 'true' : 'false',
           role: 'button',
           tabIndex: 0,
+          style: depth > 0 ? { paddingLeft: `${6 + depth * 12}px` } : undefined,
           title: `${label} · ${t('preview.dblclick')}`,
           onClick: () => pickFile(file),
           onDoubleClick: () => {
@@ -3666,6 +3937,7 @@ window.__ModuleLoader__.load({
               index,
             )
           },
+          onContextMenu: (event) => openFileContextMenu(event, file),
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault()
@@ -3684,32 +3956,103 @@ window.__ModuleLoader__.load({
             onChange: () => toggleStage(file),
           })
           : null,
-        h('span', { className: 'gdt-status', 'data-status': file.status }, file.status),
+        fileStatusBadges(file),
         h('span', { className: 'gdt-path' }, file.path),
         h('span', { className: 'gdt-counts' }, counts),
-        worktreeScope
-          ? h('button', {
-            type: 'button',
-            className: 'gdt-btn',
-            title: t('discard.action'),
-            'aria-label': t('discard.action'),
-            onClick: (event) => {
-              event.stopPropagation()
-              setDiscardTarget([file.path])
-            },
-          }, t('discard.action'))
-          : null)
+        h('span', { className: 'gdt-row-actions' },
+          worktreeScope
+            ? h('button', {
+              type: 'button',
+              className: 'gdt-btn',
+              title: t('discard.action'),
+              'aria-label': t('discard.action'),
+              onClick: (event) => {
+                event.stopPropagation()
+                setDiscardTarget([file.path])
+              },
+            }, t('discard.action'))
+            : null))
       }
 
-      const fileList = files.length === 0 ? null : h('div', { className: 'gdt-files' },
+      const treeRows = (() => {
+        if (fileView !== 'tree' || files.length === 0) return null
+        const root = { children: new Map() }
+        for (const file of files) {
+          const parts = file.path.split('/')
+          let node = root
+          for (let partIndex = 0; partIndex < parts.length - 1; partIndex += 1) {
+            const name = parts[partIndex]
+            if (node.children.has(name) !== true) node.children.set(name, { name, dir: true, children: new Map() })
+            node = node.children.get(name)
+          }
+          const leaf = parts[parts.length - 1]
+          node.children.set(`\u0000${leaf}`, { name: leaf, file })
+        }
+        const rows = []
+        const walk = (node, depth, prefix) => {
+          for (const child of node.children.values()) {
+            const full = prefix === '' ? child.name : `${prefix}/${child.name}`
+            if (child.dir === true) {
+              const open = expandedDirs[full] !== false
+              rows.push({ type: 'dir', path: full, name: child.name, depth, open })
+              if (open) walk(child, depth + 1, full)
+            } else {
+              rows.push({ type: 'file', file: child.file, depth })
+            }
+          }
+        }
+        walk(root, 0, '')
+        return rows
+      })()
+      const listRows = treeRows === null
+        ? files.map((file) => ({ type: 'file', file, depth: 0 }))
+        : treeRows
+      const FILE_ROW_HEIGHT = 28
+      const virtualized = listRows.length > 80
+      const firstRow = virtualized ? Math.max(0, Math.floor(fileScrollTop / FILE_ROW_HEIGHT) - 6) : 0
+      const lastRow = virtualized ? Math.min(listRows.length, firstRow + 40) : listRows.length
+      const rowNodes = listRows.slice(firstRow, lastRow).map((row) => {
+        if (row.type === 'dir') {
+          return h('div', {
+            key: `dir:${row.path}`,
+            className: 'gdt-dir',
+            role: 'button',
+            tabIndex: 0,
+            style: { paddingLeft: `${6 + row.depth * 12}px` },
+            onClick: () => setExpandedDirs((previous) => Object.assign({}, previous, { [row.path]: previous[row.path] === false })),
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              setExpandedDirs((previous) => Object.assign({}, previous, { [row.path]: previous[row.path] === false }))
+            },
+          },
+          h('span', { className: 'gdt-dir-caret' }, row.open ? '▾' : '▸'),
+          h('span', { className: 'gdt-path' }, row.name))
+        }
+        return fileRow(row.file, files.indexOf(row.file), row.depth)
+      })
+
+      const fileList = files.length === 0 ? null : h('div', {
+        className: 'gdt-files',
+        onScroll: (event) => {
+          if (virtualized) setFileScrollTop(event.currentTarget.scrollTop)
+        },
+      },
+      h('div', { className: 'gct-file-head' },
+        h('span', { className: 'gdt-summary' }, worktreeScope
+          ? t('commit.staged', { n: stagedCount })
+          : t('tab.summaryPrefix', { files: files.length })),
+        h('span', { className: 'gdt-spacer' }),
+        h('button', { type: 'button', className: 'gdt-btn', 'data-active': fileView === 'tree' ? 'true' : 'false', onClick: () => setFileView('tree') }, t('view.tree')),
+        h('button', { type: 'button', className: 'gdt-btn', 'data-active': fileView === 'list' ? 'true' : 'false', onClick: () => setFileView('list') }, t('view.list')),
         worktreeScope
-          ? h('div', { className: 'gct-file-head' },
-            h('span', { className: 'gdt-summary' }, t('commit.staged', { n: stagedCount })),
-            h('span', { className: 'gdt-spacer' }),
+          ? h(React.Fragment, null,
             h('button', { type: 'button', className: 'gdt-btn', onClick: () => void stagePaths([], true) }, t('stage.all')),
             h('button', { type: 'button', className: 'gdt-btn', onClick: () => void unstagePaths([], true) }, t('unstage.all')))
-          : null,
-        files.map(fileRow))
+          : null),
+      virtualized ? h('div', { key: 'top-spacer', style: { height: `${firstRow * FILE_ROW_HEIGHT}px` } }) : null,
+      ...rowNodes,
+      virtualized ? h('div', { key: 'bottom-spacer', style: { height: `${Math.max(0, (listRows.length - lastRow) * FILE_ROW_HEIGHT)}px` } }) : null)
 
       const configRow = (label, node) => h('label', { className: 'gct-config-row' },
         h('span', { className: 'gct-config-label' }, label),
@@ -4106,6 +4449,119 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'gdt-btn', onClick: () => void discardPaths() }, t('discard.confirmYes')))),
       ].filter((node) => node !== null)
 
+      const menuPopup = repoMenu === null ? null : h('div', {
+        ref: popupRef,
+        className: 'gdt-popup',
+        style: {
+          left: `${Math.max(8, Math.min(repoMenu.left, (typeof window === 'undefined' ? 0 : window.innerWidth) - 360))}px`,
+          top: `${Math.max(8, Math.min(repoMenu.top, (typeof window === 'undefined' ? 0 : window.innerHeight) - 340))}px`,
+        },
+      },
+      repoMenu.mode === 'repository'
+        ? h('div', { className: 'gdt-popup-body' },
+          h('div', { className: 'gdt-popup-title' }, t('repo.title')),
+          repositoryEntries === null
+            ? h('div', { className: 'gdt-note' }, t('panel.loading'))
+            : repositoryEntries.length === 0
+              ? h('div', { className: 'gdt-note' }, t('repo.empty'))
+              : repositoryEntries.map((entry) => h('div', {
+                key: entry.id,
+                className: 'gdt-popup-row',
+                'data-active': entry.active ? 'true' : 'false',
+                title: entry.path,
+                role: 'button',
+                tabIndex: 0,
+                onClick: () => void selectRepositoryEntry(entry),
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  void selectRepositoryEntry(entry)
+                },
+              },
+              h('span', { className: 'gdt-path' }, entry.name),
+              h('span', { className: 'gdt-popup-sub' }, entry.exists === true ? entry.path : `${entry.path} (missing)`),
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn',
+                onClick: (event) => {
+                  event.stopPropagation()
+                  void removeRepositoryEntry(entry)
+                },
+              }, t('repo.remove')))),
+          h('div', { className: 'gdt-popup-sep' }),
+          h('div', {
+            className: 'gdt-popup-row',
+            role: 'button',
+            tabIndex: 0,
+            onClick: () => void useSessionRepository(),
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              void useSessionRepository()
+            },
+          }, t('repo.session')),
+          h('div', { className: 'gdt-popup-add' },
+            h('input', {
+              className: 'gdt-input',
+              placeholder: t('repo.addPlaceholder'),
+              value: repoInput,
+              spellCheck: false,
+              onChange: (event) => setRepoInput(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                void addRepositoryPath()
+              },
+            }),
+            h('button', {
+              type: 'button',
+              className: 'gdt-btn',
+              disabled: repoBusy || repoInput.trim() === '',
+              onClick: () => void addRepositoryPath(),
+            }, t('repo.add'))),
+          repoError === null ? null : h('div', { className: 'gdt-error' }, errorText(repoError)))
+        : h('div', { className: 'gdt-popup-body' },
+          h('div', { className: 'gdt-popup-title', title: repoMenu.file.path }, repoMenu.file.path),
+          h('div', {
+            className: 'gdt-popup-row',
+            role: 'button',
+            tabIndex: 0,
+            onClick: () => {
+              setRepoMenu(null)
+              openDiffPreview(sessionId, scope, scope === 'branch' ? baseValue : null,
+                files.map((entry) => ({ path: entry.path, status: entry.status, untracked: entry.status === '?' })),
+                files.indexOf(repoMenu.file))
+            },
+          }, t('preview.open')),
+          worktreeScope
+            ? h('div', {
+              className: 'gdt-popup-row',
+              role: 'button',
+              tabIndex: 0,
+              onClick: () => {
+                setRepoMenu(null)
+                toggleStage(repoMenu.file)
+              },
+            }, repoMenu.file.staged === true ? t('stage.unstage') : t('stage.stage'))
+            : null,
+          worktreeScope
+            ? h('div', {
+              className: 'gdt-popup-row',
+              role: 'button',
+              tabIndex: 0,
+              onClick: () => {
+                setRepoMenu(null)
+                setDiscardTarget([repoMenu.file.path])
+              },
+            }, t('discard.action'))
+            : null,
+          h('div', {
+            className: 'gdt-popup-row',
+            role: 'button',
+            tabIndex: 0,
+            onClick: () => void copyPath(repoMenu.file.path),
+          }, t('repo.copyPath'))))
+
       const diffLang = selected === null ? null : languageOf(selected.path)
       const diffToolbar = selected === null ? null : h('div', { className: 'gdt-diff-bar' },
         h('span', { className: 'gdt-diff-path', title: selected.path }, selected.path),
@@ -4141,8 +4597,18 @@ window.__ModuleLoader__.load({
         } else if (diff.hunks.length === 0) {
           diffBody = h('div', { className: 'gdt-note' }, t('tab.empty'))
         } else {
+          const diffRowCount = diff.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0)
+          const capped = diffRowCount > 1200 && !diffExpanded
+          const shownHunks = capped ? limitDiffHunks(diff.hunks, 1200) : diff.hunks
           diffBody = h('div', { className: 'gdt-scroll' },
-            view === 'side' ? h(SideDiff, { hunks: diff.hunks, wrap, lang: diffLang }) : h(UnifiedDiff, { hunks: diff.hunks, wrap, lang: diffLang }),
+            view === 'side' ? h(SideDiff, { hunks: shownHunks, wrap, lang: diffLang }) : h(UnifiedDiff, { hunks: shownHunks, wrap, lang: diffLang }),
+            capped
+              ? h('div', { className: 'gdt-note' }, h('button', {
+                type: 'button',
+                className: 'gdt-btn',
+                onClick: () => setDiffExpanded(true),
+              }, t('diff.expand')))
+              : null,
             diff.truncated === true ? h('div', { className: 'gdt-note' }, t('tab.truncated')) : null)
         }
       }
@@ -4158,6 +4624,7 @@ window.__ModuleLoader__.load({
         conflictSection,
         syncDetails,
         banners,
+        menuPopup,
         h('div', { className: 'gdt-split' }, statusNodes, fileList, diffPane))
     }
 

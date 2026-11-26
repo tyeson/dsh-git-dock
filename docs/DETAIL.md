@@ -88,6 +88,21 @@ switching and creating branches.
   dependency-free syntax highlighting for common languages. `Esc` closes it,
   `↑/↓` or `J/K` switch between the changed files; because the list stays mounted,
   closing returns to the same scroll position.
+- **Repository registry (A1)** — repositories are registered under
+  `<DSH_HOME>/dsh-git-dock/repositories.json` (canonical real path, id, timestamps)
+  and the review tab's repository menu switches the session's active repository or
+  returns to the session directory. Routes resolve the active repository first and
+  fall back to the session cwd, so existing session-bound calls keep working.
+- **Request ids, error codes and audit (A0)** — every API response carries a
+  `requestId`; `docs/ERROR-CODES.md` groups the codes and remedies. Dangerous
+  operations (discard/undo, amend, merge abort/complete, push) append records to
+  `<DSH_HOME>/dsh-git-dock/audit.jsonl`. Deliberate deviations from the GitFlow
+  Studio plan are recorded in `docs/DEVIATIONS.md`.
+- **Change list (A2)** — files expose both index and worktree status, the list
+  toggles between a flat list and a directory tree, files over 80 rows are
+  virtualized, rows reveal quick actions on hover, right-click opens a context
+  menu (preview / stage / discard / copy path), and diffs above 1200 rendered rows
+  collapse behind a "Show all" action.
 - **Safety and layout** — discarding is confirmed and can be undone (the newest
   `dsh-git-dock discard` stash entry is reapplied), aborting a merge needs an
   explicit confirmation, and the tab groups its status (changes, sync, operation)

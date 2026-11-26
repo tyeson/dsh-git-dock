@@ -9,7 +9,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -580,6 +580,42 @@ check('saved total limit is enforced on commit', savedCommitLimit.status === 400
 const resetConv = unwrap(await callApi(handler, 'convention.save', { sessionId: SESSION, reset: true }))
 check('reset restores the defaults', resetConv.effective.maxLength === null && resetConv.effective.totalMaxLength === 500 && resetConv.effective.types.includes('chore'), resetConv.effective)
 check('reset clears the saved value', resetConv.saved === null)
+
+console.log('A0 request id, audit, dual status')
+const repoResponse = await callApi(handler, 'repo', { sessionId: SESSION })
+check('success responses carry a request id', typeof repoResponse.body.requestId === 'string' && repoResponse.body.requestId !== '', repoResponse.body.requestId)
+const errorResponse = await callApi(handler, 'pull', { sessionId: 'missing-session' })
+check('error responses carry a request id', typeof errorResponse.body.requestId === 'string' && errorResponse.body.requestId !== '', errorResponse.body.requestId)
+const auditPath = join(SMOKE_DSH_HOME, 'dsh-git-dock', 'audit.jsonl')
+check('dangerous operations are audited', existsSync(auditPath) && readFileSync(auditPath, 'utf8').includes('"action":"discard"'), existsSync(auditPath))
+appendFileSync(join(repoDir, 'dual.txt'), 'one\n')
+unwrap(await callApi(handler, 'stage', { sessionId: SESSION, paths: ['dual.txt'] }))
+appendFileSync(join(repoDir, 'dual.txt'), 'two\n')
+const dualChanges = unwrap(await callApi(handler, 'changes', { sessionId: SESSION, scope: 'worktree' }))
+const dualFile = dualChanges.files.find((file) => file.path === 'dual.txt')
+check('files expose index and worktree status', dualFile !== undefined && dualFile.indexStatus === 'A' && dualFile.worktreeStatus === 'M', dualFile)
+
+console.log('A1 repository registry')
+const samePath = (left, right) => typeof left === 'string' && typeof right === 'string'
+  && left.replace(/\\/g, '/').toLowerCase() === right.replace(/\\/g, '/').toLowerCase()
+const initialRegistry = unwrap(await callApi(handler, 'repositoryList', { sessionId: SESSION }))
+check('registry can be listed', Array.isArray(initialRegistry.repositories), initialRegistry.repositories)
+const registered = unwrap(await callApi(handler, 'repositoryAdd', { sessionId: SESSION, path: repoDir }))
+check('repository can be registered and becomes active', registered.repositories.some((entry) => samePath(entry.path, repoDir) && entry.active === true), registered.repositories)
+const invalid = await callApi(handler, 'repositoryValidate', { sessionId: SESSION, path: join(repoDir, 'does-not-exist') })
+check('invalid repository paths are reported', invalid.body.value.valid === false && invalid.body.value.code === 'path-missing', invalid.body.value)
+const secondDir = mkdtempSync(join(tmpdir(), 'dgd-second-'))
+git(secondDir, 'init', '-q')
+const secondRegistered = unwrap(await callApi(handler, 'repositoryAdd', { sessionId: SESSION, path: secondDir }))
+const secondEntry = secondRegistered.repositories.find((entry) => samePath(entry.path, secondDir))
+check('a second repository can be registered', secondEntry !== undefined && secondEntry.active === true, secondEntry)
+const overridden = unwrap(await callApi(handler, 'repo', { sessionId: SESSION }))
+check('routes target the selected repository', samePath(overridden.repo.repoRoot, secondDir), overridden.repo.repoRoot)
+const backToSession = unwrap(await callApi(handler, 'repositorySession', { sessionId: SESSION }))
+check('the session directory can be restored', samePath(backToSession.repo.repoRoot, repoDir), backToSession.repo.repoRoot)
+const removed = unwrap(await callApi(handler, 'repositoryRemove', { sessionId: SESSION, repositoryId: secondEntry.id }))
+check('registry entries can be removed', removed.repositories.every((entry) => entry.id !== secondEntry.id), removed.repositories)
+rmSync(secondDir, { recursive: true, force: true })
 
 console.log('in-progress operation')
 writeFileSync(join(repoDir, '.git', 'MERGE_HEAD'), `${created.repo.head}\n`)

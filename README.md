@@ -16,7 +16,10 @@ Repository: <https://github.com/tyeson/dsh-git-dock>
 > `git_branch` tool. Commit-message drafting has its own model/effort picker
 > (defaults to the conversation's choice, remembers the last one). Double-click a
 > changed file for a full-screen, syntax-highlighted side-by-side preview with
-> keyboard file switching.
+> keyboard file switching. A0–A2 of the GitFlow Studio plan are implemented:
+> request ids, error-code table, dangerous-operation audit, a multi-repository
+> registry with per-session switching, dual index/worktree statuses, tree/list
+> views, virtualized file list, context menus and large-diff degradation.
 
 ## Install
 
