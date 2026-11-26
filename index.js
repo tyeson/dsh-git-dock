@@ -1427,6 +1427,33 @@ async function listModelOptions(ctx, body) {
   return { providers: entries, current }
 }
 
+/**
+ * Resolve one model's reasoning efforts. `listModels` only advertises ids, so the
+ * picker asks for the exact model's metadata when it opens the effort list.
+ */
+async function resolveModelEfforts(llm, provider, model) {
+  const result = { efforts: [], defaultEffort: null }
+  try {
+    if (typeof llm.resolveModelInfo !== 'function') return result
+    const info = await llm.resolveModelInfo(provider, model)
+    const reasoning = info !== null && info !== undefined ? info.reasoning : undefined
+    if (reasoning !== null && reasoning !== undefined && Array.isArray(reasoning.efforts)) {
+      for (const effort of reasoning.efforts) {
+        const id = typeof effort === 'string' ? effort : effort !== null && typeof effort === 'object' ? effort.id : undefined
+        if (typeof id !== 'string' || id === '') continue
+        const name = effort !== null && typeof effort === 'object' && typeof effort.name === 'string' && effort.name !== '' ? effort.name : id
+        result.efforts.push({ id, name })
+      }
+    }
+    if (reasoning !== null && reasoning !== undefined && typeof reasoning.defaultEffort === 'string' && reasoning.defaultEffort !== '') {
+      result.defaultEffort = reasoning.defaultEffort
+    }
+  } catch {
+    // An adapter that cannot resolve this model keeps the picker on "default".
+  }
+  return result
+}
+
 /** The built-in convention used when the repository declares nothing stricter. */
 const DEFAULT_COMMIT_CONVENTION = Object.freeze({
   format: 'type(scope): 中文描述',
@@ -2295,6 +2322,16 @@ const API = {
   /** Provider/model routes (with reasoning efforts) for the commit-message picker. */
   async modelOptions(ctx, body) {
     return listModelOptions(ctx, body)
+  },
+
+  /** Reasoning efforts offered by one exact model. */
+  async modelInfo(ctx, body) {
+    const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
+    const model = typeof body.model === 'string' ? body.model.trim() : ''
+    if (provider === '' || model === '') throw new ApiError('bad-request', 'provider and model are required', 400)
+    const llm = ctx.get('llm')
+    if (llm === undefined || llm === null) throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
+    return resolveModelEfforts(llm, provider, model)
   },
 
   /** The effective commit convention plus the saved override. */

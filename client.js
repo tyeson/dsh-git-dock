@@ -1057,7 +1057,7 @@ window.__ModuleLoader__.load({
     }
 
     /** Open the model/effort dropdown above the commit bar. */
-    function openModelPicker(element, options, choice, onApply) {
+    function openModelPicker(element, options, choice, sessionId, onApply) {
       closeMergePicker()
       closeBasePicker()
       closePanel(false)
@@ -1065,6 +1065,7 @@ window.__ModuleLoader__.load({
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setModelState({
         open: true,
+        sessionId,
         anchor: {
           left: rect.left,
           top: rect.top,
@@ -1081,7 +1082,7 @@ window.__ModuleLoader__.load({
     }
 
     function closeModelPicker() {
-      setModelState({ open: false, anchor: null, options: null, onApply: null, error: null, status: 'idle' })
+      setModelState({ open: false, sessionId: null, anchor: null, options: null, onApply: null, error: null, status: 'idle' })
     }
 
     /** Apply a choice (null means "follow the conversation") and close. */
@@ -2256,6 +2257,34 @@ window.__ModuleLoader__.load({
       const snapshot = useModelStore()
       const panelRef = React.useRef(null)
       const [submenu, setSubmenu] = React.useState(null)
+      const [effortsCache, setEffortsCache] = React.useState(null)
+      const choiceKey = snapshot.choice === null ? null : `${snapshot.choice.provider}/${snapshot.choice.model}`
+      const currentKey = snapshot.options === null || snapshot.options.current === null || snapshot.options.current === undefined
+        ? null
+        : `${snapshot.options.current.provider}/${snapshot.options.current.model}`
+      React.useEffect(() => {
+        if (snapshot.open !== true) return undefined
+        const key = choiceKey ?? currentKey
+        if (key === null) return undefined
+        const split = key.indexOf('/')
+        const provider = key.slice(0, split)
+        const model = key.slice(split + 1)
+        let cancelled = false
+        setEffortsCache({ key, status: 'loading', efforts: [], defaultEffort: null })
+        void (async () => {
+          try {
+            const value = await callApi('modelInfo', { sessionId: snapshot.sessionId, provider, model })
+            if (!cancelled) {
+              setEffortsCache({ key, status: 'ready', efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
+            }
+          } catch {
+            if (!cancelled) setEffortsCache({ key, status: 'error', efforts: [], defaultEffort: null })
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [snapshot.open, snapshot.sessionId, choiceKey, currentKey])
       React.useEffect(() => {
         ensureStyle()
       }, [])
@@ -2318,6 +2347,8 @@ window.__ModuleLoader__.load({
           }
         }
       }
+      const effortKey = choiceKey ?? currentKey
+      const fetchedEfforts = effortKey !== null && effortsCache !== null && effortsCache.key === effortKey ? effortsCache : null
       const conversationCurrent = options === null || options.current === null || options.current === undefined
         ? null
         : {
@@ -2340,9 +2371,15 @@ window.__ModuleLoader__.load({
         : options !== null && options.current !== null && options.current !== undefined
           ? options.current.reasoningEffort ?? null
           : null
+      const availableEfforts = (active?.efforts ?? []).length > 0 ? active.efforts : (fetchedEfforts?.efforts ?? [])
       const effortLabel = (id) => {
-        if (id === null || id === undefined || id === '') return t('commit.effortAuto')
-        const effort = (active?.efforts ?? []).find((entry) => entry.id === id)
+        if (id === null || id === undefined || id === '') {
+          const fallback = fetchedEfforts === null ? null : fetchedEfforts.defaultEffort
+          if (fallback === null || fallback === undefined) return t('commit.effortAuto')
+          const effort = availableEfforts.find((entry) => entry.id === fallback)
+          return `${t('commit.effortAuto')} · ${effort === undefined ? fallback : effort.name}`
+        }
+        const effort = availableEfforts.find((entry) => entry.id === id)
         return effort === undefined ? id : effort.name
       }
       const followBase = conversationCurrent === null
@@ -2413,13 +2450,17 @@ window.__ModuleLoader__.load({
         ? [h('div', { key: 'effort-empty', className: 'dgd-empty' }, t('commit.modelUnavailable'))]
         : [
           choiceRow('effort:auto', t('commit.effortAuto'), activeEffortId === null, () => pickEffort(null)),
-          ...(active.efforts ?? []).map((effort) => choiceRow(
+          ...availableEfforts.map((effort) => choiceRow(
             `effort:${effort.id}`,
             effort.name,
             activeEffortId === effort.id,
             () => pickEffort(effort.id),
           )),
-        ]
+          fetchedEfforts !== null && fetchedEfforts.status === 'loading' && availableEfforts.length === 0
+            ? h('div', { key: 'effort-loading', className: 'gdt-mp-row' },
+              h('span', { className: 'gdt-mp-label' }, t('panel.loading')), null)
+            : null,
+        ].filter((node) => node !== null)
 
       return h('div', {
         ref: panelRef,
@@ -2555,6 +2596,7 @@ window.__ModuleLoader__.load({
       const [aiBusy, setAiBusy] = React.useState(false)
       const [modelOptions, setModelOptions] = React.useState(null)
       const [modelChoice, setModelChoice] = React.useState(readStoredModelChoice)
+      const [activeModelEfforts, setActiveModelEfforts] = React.useState(null)
       const [commitHint, setCommitHint] = React.useState(null)
       const [commitLimit, setCommitLimit] = React.useState(500)
       const [showConfig, setShowConfig] = React.useState(false)
@@ -2596,6 +2638,31 @@ window.__ModuleLoader__.load({
           cancelled = true
         }
       }, [sessionId])
+      const labelRouteKey = modelChoice !== null
+        ? `${modelChoice.provider}/${modelChoice.model}`
+        : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
+          ? `${modelOptions.current.provider}/${modelOptions.current.model}`
+          : null
+      React.useEffect(() => {
+        if (sessionId === undefined || labelRouteKey === null) return undefined
+        const split = labelRouteKey.indexOf('/')
+        const provider = labelRouteKey.slice(0, split)
+        const model = labelRouteKey.slice(split + 1)
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('modelInfo', { sessionId, provider, model })
+            if (!cancelled) {
+              setActiveModelEfforts({ key: labelRouteKey, efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
+            }
+          } catch {
+            if (!cancelled) setActiveModelEfforts(null)
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, labelRouteKey])
       const requestRef = React.useRef(0)
       const dataRef = React.useRef(null)
       const [reloadTick, setReloadTick] = React.useState(0)
@@ -2859,17 +2926,22 @@ window.__ModuleLoader__.load({
         if (active === null) return t('commit.modelBusy')
         const match = flat.find((entry) => entry.provider === active.provider && entry.model === active.model)
         const name = match === undefined ? active.model : match.name
+        const matchedKey = `${active.provider}/${active.model}`
+        const effortsList = activeModelEfforts !== null && activeModelEfforts.key === matchedKey
+          ? activeModelEfforts.efforts
+          : (match?.efforts ?? [])
         const effortId = active.reasoningEffort === null || active.reasoningEffort === undefined ? null : active.reasoningEffort
-        const effortName = effortId === null
+        const effectiveEffortId = effortId ?? (activeModelEfforts !== null && activeModelEfforts.key === matchedKey ? activeModelEfforts.defaultEffort : null)
+        const effortName = effectiveEffortId === null || effectiveEffortId === undefined
           ? null
-          : (match?.efforts ?? []).find((effort) => effort.id === effortId)?.name ?? effortId
+          : (effortsList.find((effort) => effort.id === effectiveEffortId) ?? { name: effectiveEffortId }).name
         const effort = effortName === null ? '' : ` · ${effortName}`
         return `${name}${effort}`
       })()
 
       const openCommitModelPicker = (event) => {
         if (modelOptions === null) return
-        openModelPicker(event.currentTarget, modelOptions, modelChoice, (next) => {
+        openModelPicker(event.currentTarget, modelOptions, modelChoice, sessionId, (next) => {
           setModelChoice(next)
           writeStoredModelChoice(next)
         })

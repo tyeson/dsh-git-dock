@@ -104,6 +104,15 @@ function makeContext(cwd, state) {
         },
       ]
     },
+    async resolveModelInfo(provider, model) {
+      if (provider !== 'mock' || model !== 'mock') throw new Error('unknown model')
+      return {
+        provider,
+        id: model,
+        name: 'Mock Chat',
+        reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'low' },
+      }
+    },
   }
   const ctx = {
     sessions: {
@@ -409,6 +418,11 @@ const modelOptions = unwrap(await callApi(handler, 'modelOptions', { sessionId: 
 check('model options list the provider', modelOptions.providers.some((provider) => provider.provider === 'mock'), modelOptions.providers)
 check('model options carry reasoning efforts', modelOptions.providers[0].models[0].efforts.length === 2, modelOptions.providers[0].models[0])
 check('model options expose the session route', modelOptions.current !== null && modelOptions.current.provider === 'mock', modelOptions.current)
+const modelInfo = unwrap(await callApi(handler, 'modelInfo', { sessionId: SESSION, provider: 'mock', model: 'mock' }))
+check('model info lists reasoning efforts', modelInfo.efforts.length === 2 && modelInfo.efforts[1].id === 'high', modelInfo)
+check('model info reports the default effort', modelInfo.defaultEffort === 'low', modelInfo.defaultEffort)
+const badModelInfo = await callApi(handler, 'modelInfo', { sessionId: SESSION, provider: 'mock' })
+check('model info requires provider and model', badModelInfo.status === 400 && badModelInfo.body.error.code === 'bad-request', badModelInfo.body)
 const chosen = unwrap(await callApi(handler, 'commitMessage', {
   sessionId: SESSION,
   language: 'en',
