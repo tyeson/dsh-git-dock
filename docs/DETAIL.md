@@ -84,6 +84,13 @@ switching and creating branches.
   dependency-free syntax highlighting for common languages. `Esc` closes it,
   `↑/↓` or `J/K` switch between the changed files; because the list stays mounted,
   closing returns to the same scroll position.
+- **Safety and layout** — discarding is confirmed and can be undone (the newest
+  `dsh-git-dock discard` stash entry is reapplied), aborting a merge needs an
+  explicit confirmation, and the tab groups its status (changes, sync, operation)
+  into labelled chips. Buttons show hover/press/disabled feedback with inline
+  spinners for loading, and a ResizeObserver switches the tab to a narrow layout
+  (wrapped toolbars, shorter file list) below ~520px. All colours come from theme
+  tokens or `color-mix` over them, so dark mode keeps the same contrast.
 - **Guards** — switching and creating are refused while a merge, rebase,
   cherry-pick, revert, or bisect is in progress; while the session's turn is
   open both require an explicit second confirmation; a stale panel (the

@@ -190,6 +190,11 @@ window.__ModuleLoader__.load({
         'discard.action': '丢弃',
         'discard.confirm': '丢弃 {n} 个文件的改动？已跟踪的改动会存进 stash，仍可恢复。',
         'discard.confirmYes': '确认丢弃',
+        'discard.undo': '撤销丢弃',
+        'discard.undone': '已恢复丢弃的改动',
+        'discard.undoHint': '已丢弃 {n} 个文件的改动（可从 stash 恢复）',
+        'merge.abortConfirm': '确定放弃当前合并？已解决的冲突进度会丢失。',
+        'merge.abortYes': '确认放弃',
         'sync.fetch': '获取',
         'sync.pull': '拉取',
         'sync.push': '推送',
@@ -274,6 +279,8 @@ window.__ModuleLoader__.load({
         'tab.binary': '二进制文件，无法对比',
         'tab.truncated': '内容过大，仅显示前 5000 行',
         'tab.unified': '统一',
+        'tab.changesLabel': '变更',
+        'tab.syncLabel': '同步',
         'preview.side': '并排',
         'preview.unified': '统一',
         'preview.wrap': '换行',
@@ -450,6 +457,11 @@ window.__ModuleLoader__.load({
         'discard.action': 'Discard',
         'discard.confirm': 'Discard changes in {n} file(s)? Tracked changes are stashed and can be recovered.',
         'discard.confirmYes': 'Discard',
+        'discard.undo': 'Undo discard',
+        'discard.undone': 'Discarded changes restored',
+        'discard.undoHint': 'Discarded changes in {n} file(s) — they can be restored',
+        'merge.abortConfirm': 'Abort this merge? Resolved conflict progress will be lost.',
+        'merge.abortYes': 'Abort merge',
         'sync.fetch': 'Fetch',
         'sync.pull': 'Pull',
         'sync.push': 'Push',
@@ -534,6 +546,8 @@ window.__ModuleLoader__.load({
         'tab.binary': 'Binary file — no comparison',
         'tab.truncated': 'Too large — showing the first 5000 lines',
         'tab.unified': 'Unified',
+        'tab.changesLabel': 'Changes',
+        'tab.syncLabel': 'Sync',
         'preview.side': 'Side by side',
         'preview.unified': 'Unified',
         'preview.wrap': 'Wrap',
@@ -1477,16 +1491,32 @@ window.__ModuleLoader__.load({
         '.gdt-mp-list .gdt-mp-row{padding:6px 10px;font-size:12.5px}',
         '.gdt-summary{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}',
         '.gdt-spacer{flex:1}',
-        '.gdt-btn{appearance:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}',
+        '.gdt-btn{appearance:none;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;transition:background .12s ease,color .12s ease,border-color .12s ease,opacity .12s ease}',
         '.gdt-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+        '.gdt-btn:active{background:var(--dsw-alias-interactive-bg-hover);transform:translateY(1px)}',
         '.gdt-btn[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
         '.gdt-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+        '.gdt-btn:disabled{opacity:.45;cursor:default;pointer-events:none}',
+        '.gdt-btn svg{flex:none}',
+        '.gdt-spinner{display:inline-block;width:11px;height:11px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gdt-spin .7s linear infinite;flex:none}',
+        '@keyframes gdt-spin{to{transform:rotate(360deg)}}',
+        '.gdt-status-groups{display:inline-flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}',
+        '.gdt-status-group{display:inline-flex;align-items:center;gap:4px;min-width:0}',
+        '.gdt-status-group + .gdt-status-group{border-left:1px solid var(--dsw-alias-border-l1);padding-left:8px}',
+        '.gdt-status-label{color:var(--dsw-alias-label-tertiary);font-size:11px}',
+        '.gdt-root[data-narrow="true"] .gdt-bar{gap:6px;padding:6px 8px}',
+        '.gdt-root[data-narrow="true"] .gdt-status-groups{width:100%;order:20}',
+        '.gdt-root[data-narrow="true"] .gct-commit-row{flex-wrap:wrap}',
+        '.gdt-root[data-narrow="true"] .gct-remote{flex-wrap:wrap}',
+        '.gdt-root[data-narrow="true"] .gdt-files{max-height:30%}',
+        '.gdt-root[data-narrow="true"] .gdt-diff-path{font-size:11px}',
+        '.gdt-root[data-narrow="true"] .gct-file-head{flex-wrap:wrap}',
         '.gdt-select{height:24px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:0 4px;max-width:180px}',
         '.gdt-split{display:flex;flex-direction:column;min-height:0;flex:1}',
         '.gdt-files{max-height:38%;overflow:auto;border-bottom:1px solid var(--dsw-alias-border-l1);padding:2px 6px 6px}',
         '.gdt-file{display:flex;align-items:center;gap:8px;min-height:28px;padding:2px 6px;border-radius:var(--dsw-radius-sm,6px);cursor:pointer;min-width:0}',
         '.gdt-file:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-        '.gdt-file[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover)}',
+        '.gdt-file[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 2px 0 0 var(--dsw-alias-link)}',
         '.gdt-file:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}',
         '.gdt-status{flex:none;width:14px;text-align:center;font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary)}',
         '.gdt-status[data-status="A"],.gdt-status[data-status="?"]{color:var(--dsw-alias-state-success-primary)}',
@@ -2843,6 +2873,20 @@ window.__ModuleLoader__.load({
       const [conflictFilter, setConflictFilter] = React.useState('all')
       const [conflictSort, setConflictSort] = React.useState('path')
       const autoPushRef = React.useRef(false)
+      const rootRef = React.useRef(null)
+      const [narrow, setNarrow] = React.useState(false)
+      const [undoDiscard, setUndoDiscard] = React.useState(null)
+      const [abortConfirm, setAbortConfirm] = React.useState(false)
+      React.useEffect(() => {
+        const node = rootRef.current
+        if (typeof ResizeObserver === 'undefined' || node === null) return undefined
+        const observer = new ResizeObserver((entries) => {
+          const width = entries.length > 0 ? entries[0].contentRect.width : node.clientWidth
+          setNarrow(width < 520)
+        })
+        observer.observe(node)
+        return () => observer.disconnect()
+      }, [])
       React.useEffect(() => {
         if (sessionId === undefined) return undefined
         let cancelled = false
@@ -3148,10 +3192,29 @@ window.__ModuleLoader__.load({
         const paths = discardTarget
         setDiscardTarget(null)
         if (paths === null) return
-        await runAction(
-          () => callApi('discard', { sessionId, paths }),
-          () => null,
-        )
+        setActionError(null)
+        try {
+          await callApi('discard', { sessionId, paths })
+          setUndoDiscard({ count: paths.length })
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        }
+      }
+
+      const undoLastDiscard = async () => {
+        if (undoDiscard === null) return
+        setActionError(null)
+        try {
+          await callApi('discardUndo', { sessionId })
+          setUndoDiscard(null)
+          setNotice(t('discard.undone'))
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setActionError({ code: thrown.code, message: thrown.message })
+        }
       }
 
       const commitNow = async (amendFlag) => {
@@ -3501,28 +3564,36 @@ window.__ModuleLoader__.load({
         scopeButtons,
         scope === 'branch' ? branchButton : null,
         baseButton,
-        h('span', { className: 'gdt-summary' },
-          t('tab.summaryPrefix', { files: files.length }),
-          h('span', { className: 'gdt-add' }, `+${additions}`),
-          ' ',
-          h('span', { className: 'gdt-del' }, `−${deletions}`),
-          commits === '' ? null : ` · ${commits}`),
+        h('span', { className: 'gdt-status-groups' },
+          h('span', { className: 'gdt-status-group', title: t('tab.summary') },
+            h('span', { className: 'gdt-status-label' }, t('tab.changesLabel')),
+            h('span', { className: 'gdt-summary' },
+              t('tab.summaryPrefix', { files: files.length }),
+              h('span', { className: 'gdt-add' }, `+${additions}`),
+              ' ',
+              h('span', { className: 'gdt-del' }, `−${deletions}`))),
+          commits === '' ? null : h('span', { className: 'gdt-status-group' }, h('span', { className: 'gdt-summary' }, commits)),
+          aheadBehind === '' ? null : h('span', { className: 'gdt-status-group', title: t('tab.syncLabel') }, h('span', { className: 'gdt-summary' }, aheadBehind)),
+          repoInfo === null || repoInfo === undefined || repoInfo.operation === 'none'
+            ? null
+            : h('span', { className: 'gdt-status-group' }, h('span', { className: 'gdt-summary' }, opName(repoInfo.operation)))),
         h('span', { className: 'gdt-spacer' }),
         h('button', {
           type: 'button',
           className: 'gdt-btn',
           title: t('tab.refresh'),
+          disabled: status === 'loading' && data !== null,
           onClick: () => {
             void loadChanges()
           },
-        }, h(RefreshIcon, { size: 12 }), t('tab.refresh')))
+        }, status === 'loading' && data !== null ? h('span', { className: 'gdt-spinner' }) : h(RefreshIcon, { size: 12 }), t('tab.refresh')))
 
       const statusNodes = []
       if (status === 'error') {
         statusNodes.push(h('div', { key: 'error', className: 'gdt-error', role: 'alert' }, errorText(error)))
       }
       if (status === 'loading' && data === null) {
-        statusNodes.push(h('div', { key: 'loading', className: 'gdt-note' }, t('tab.loading')))
+        statusNodes.push(h('div', { key: 'loading', className: 'gdt-note' }, h('span', { className: 'gdt-spinner' }), ' ', t('tab.loading')))
       }
       if (status !== 'error' && data !== null && files.length === 0) {
         statusNodes.push(h('div', { key: 'empty', className: 'gdt-empty' },
@@ -3825,6 +3896,21 @@ window.__ModuleLoader__.load({
                   onClick: () => void resolveConflict(item.path),
                 }, t('merge.rowResolve')))))
           : null,
+        abortConfirm && mergeInProgress
+          ? h('div', { className: 'gdt-note' },
+            h('span', null, t('merge.abortConfirm')),
+            h('span', { className: 'gdt-spacer' }),
+            h('button', { type: 'button', className: 'gdt-btn', onClick: () => setAbortConfirm(false) }, t('panel.cancel')),
+            h('button', {
+              type: 'button',
+              className: 'gdt-btn',
+              disabled: mergeBusy !== null,
+              onClick: () => {
+                setAbortConfirm(false)
+                void abortMergeNow()
+              },
+            }, t('merge.abortYes')))
+          : null,
         mergeError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(mergeError)),
         h('div', { className: 'gct-actions' },
           h('button', {
@@ -3834,8 +3920,12 @@ window.__ModuleLoader__.load({
             onClick: () => void copyConflictList(conflictPaths),
           }, t('sync.copyConflicts')),
           mergeInProgress
-            ? h('button', { type: 'button', className: 'gdt-btn', disabled: mergeBusy !== null, onClick: () => void abortMergeNow() },
-              mergeBusy === 'abort' ? t('merge.aborting') : t('merge.abort'))
+            ? h('button', {
+              type: 'button',
+              className: 'gdt-btn',
+              disabled: mergeBusy !== null,
+              onClick: () => setAbortConfirm(true),
+            }, t('merge.abort'))
             : null,
           mergeInProgress
             ? h('button', { type: 'button', className: 'gdt-btn', disabled: mergeBusy !== null || conflictPaths.length > 0, onClick: () => void completeMergeNow() },
@@ -3936,6 +4026,10 @@ window.__ModuleLoader__.load({
       const banners = [
         actionError === null ? null : h('div', { key: 'action-error', className: 'gdt-error', role: 'alert' }, errorText(actionError)),
         notice === null ? null : h('div', { key: 'notice', className: 'gdt-note' }, notice),
+        undoDiscard === null ? null : h('div', { key: 'undo-discard', className: 'gdt-note' },
+          h('span', null, t('discard.undoHint', { n: undoDiscard.count })),
+          h('span', { className: 'gdt-spacer' }),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => void undoLastDiscard() }, t('discard.undo'))),
         pullConflictBanner,
         pushConflictBanner,
         pushBlockedBanner,
@@ -3974,7 +4068,7 @@ window.__ModuleLoader__.load({
       let diffBody = null
       if (selected !== null) {
         if (diffStatus === 'loading') {
-          diffBody = h('div', { className: 'gdt-note' }, t('tab.loading'))
+          diffBody = h('div', { className: 'gdt-note' }, h('span', { className: 'gdt-spinner' }), ' ', t('tab.loading'))
         } else if (diffStatus === 'error') {
           diffBody = h('div', { className: 'gdt-error', role: 'alert' }, errorText(diffError))
         } else if (diff === null) {
@@ -3994,7 +4088,7 @@ window.__ModuleLoader__.load({
         selected === null ? h('div', { className: 'gdt-empty' }, t('tab.selectFile')) : diffToolbar,
         diffBody)
 
-      return h('div', { className: 'gdt-root' },
+      return h('div', { className: 'gdt-root', ref: rootRef, 'data-narrow': narrow ? 'true' : 'false' },
         toolbar,
         commitBar,
         remoteBar,
@@ -4149,7 +4243,7 @@ window.__ModuleLoader__.load({
       const language = languageOf(file.path)
       const total = snapshot.files.length
       const body = snapshot.status === 'loading'
-        ? h('div', { className: 'gdt-note' }, t('tab.loading'))
+        ? h('div', { className: 'gdt-note' }, h('span', { className: 'gdt-spinner' }), ' ', t('tab.loading'))
         : snapshot.status === 'error'
           ? h('div', { className: 'gdt-error', role: 'alert' }, errorText(snapshot.error))
           : snapshot.diff === null

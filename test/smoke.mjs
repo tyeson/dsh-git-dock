@@ -397,6 +397,10 @@ check('discard restores the tracked file', git(repoDir, 'diff', '--name-only', '
 check('discard writes a backup ref', typeof discarded.backup?.ref === 'string', discarded.backup)
 check('discard stashes the change', discarded.stashed === true)
 check('discard names the stash', /dsh-git-dock discard/.test(discarded.message), discarded.message)
+const undone = unwrap(await callApi(handler, 'discardUndo', { sessionId: SESSION }))
+check('discard undo restores the tracked file', undone.repo.changes.changed > 0 && git(repoDir, 'diff', '--name-only', '--', 'main-only.txt') !== '', undone.restored)
+const undoneAgain = await callApi(handler, 'discardUndo', { sessionId: SESSION })
+check('discard undo reports when nothing is stashed', undoneAgain.status === 404 && undoneAgain.body.error.code === 'no-discard', undoneAgain.body)
 
 appendFileSync(join(repoDir, 'main-only.txt'), 'commit\n')
 unwrap(await callApi(handler, 'stage', { sessionId: SESSION, paths: ['main-only.txt'] }))

@@ -1293,6 +1293,32 @@ async function discardPaths(ctx, body, signal) {
   })
 }
 
+/** Undo the newest discard by applying its stash entry back into the worktree. */
+async function undoDiscard(ctx, body, signal) {
+  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
+  return withRepoLock(repoRoot, async () => {
+    const before = await readRepoState(ctx, body.sessionId, signal)
+    if (before.operation !== 'none') throw new ApiError('operation-in-progress', `a ${before.operation} is in progress`, 409, { state: before })
+    if (before.conflictPaths.length > 0) throw new ApiError('unresolved-conflicts', 'resolve the conflicts first', 409, { conflicts: before.conflictTypes })
+    const list = await gitText(before.repoRoot, ['stash', 'list', '--format=%gd %s'], { signal })
+    const match = list.split('\n').find((line) => line.includes('dsh-git-dock discard'))
+    if (match === undefined) throw new ApiError('no-discard', 'no discarded change is available to undo', 404)
+    const ref = match.split(' ')[0]
+    if (!/^stash@\{\d+\}$/.test(ref)) throw new ApiError('no-discard', 'no discarded change is available to undo', 404)
+    const apply = await runGit(before.repoRoot, ['stash', 'apply', ref], {
+      signal,
+      rawResult: true,
+      exitCodes: [0, 1],
+      timeoutMs: WRITE_TIMEOUT_MS,
+    })
+    if (apply.code !== 0) {
+      throw new ApiError('discard-undo-failed', firstLine(apply.stderr) || 'git stash apply failed', 409, { detail: apply.stderr.slice(0, 4_000) })
+    }
+    await runGit(before.repoRoot, ['stash', 'drop', ref], { signal, timeoutMs: WRITE_TIMEOUT_MS })
+    return { repo: await readRepoState(ctx, body.sessionId, signal), restored: ref }
+  })
+}
+
 /** Refuse changing pushed history: is HEAD contained in its upstream? */
 async function assertHeadNotPushed(repoRoot, signal) {
   let upstream
@@ -2519,6 +2545,11 @@ const API = {
   /** Discard paths through a recoverable stash plus a backup ref. */
   async discard(ctx, body, signal) {
     return discardPaths(ctx, body, signal)
+  },
+
+  /** Undo the newest discard by applying its stash entry back. */
+  async discardUndo(ctx, body, signal) {
+    return undoDiscard(ctx, body, signal)
   },
 
   /** Commit staged changes, optionally amending the tip. */
