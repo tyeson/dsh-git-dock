@@ -3299,6 +3299,68 @@ window.__ModuleLoader__.load({
       const [historyFileDiff, setHistoryFileDiff] = React.useState(null)
       // ── A5: one-click conflict handoff to the conversation ──────────────
       const [aiConflictBusy, setAiConflictBusy] = React.useState(false)
+      const [modelOptionsTick, setModelOptionsTick] = React.useState(0)
+
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined
+        let cancelled = false
+        const timeout = new Promise((resolve) => {
+          const timer = setTimeout(() => resolve({ timedOut: true }), 10_000)
+          if (typeof timer.unref === 'function') timer.unref()
+        })
+        void (async () => {
+          try {
+            const value = await Promise.race([callApi('modelOptions', { sessionId }), timeout])
+            if (cancelled) return
+            if (value !== null && typeof value === 'object' && value.timedOut === true) {
+              setModelOptions({ providers: [], current: null, timedOut: true })
+              return
+            }
+            setModelOptions(value)
+            setModelChoice((previous) => {
+              if (previous === null) return previous
+              const exists = (value.providers ?? []).some((provider) => provider.provider === previous.provider
+                && (provider.models ?? []).some((model) => model.model === previous.model))
+              if (exists) return previous
+              writeStoredModelChoice(null)
+              return null
+            })
+          } catch (thrown) {
+            if (!cancelled) {
+              setModelOptions({ providers: [], current: null, lastError: { code: thrown.code, message: thrown.message } })
+            }
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, modelOptionsTick])
+
+      const labelRouteKey = modelChoice !== null
+        ? `${modelChoice.provider}/${modelChoice.model}`
+        : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
+          ? `${modelOptions.current.provider}/${modelOptions.current.model}`
+          : null
+      React.useEffect(() => {
+        if (sessionId === undefined || labelRouteKey === null) return undefined
+        const split = labelRouteKey.indexOf('/')
+        const provider = labelRouteKey.slice(0, split)
+        const model = labelRouteKey.slice(split + 1)
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('modelInfo', { sessionId, provider, model })
+            if (!cancelled) {
+              setActiveModelEfforts({ key: labelRouteKey, efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
+            }
+          } catch {
+            if (!cancelled) setActiveModelEfforts(null)
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, labelRouteKey])
 
       /** Send the chosen conflict files to the session agent in one step. */
       const sendConflictsToAgent = async () => {
@@ -3816,7 +3878,12 @@ window.__ModuleLoader__.load({
       })()
 
       const openCommitModelPicker = (event) => {
-        if (modelOptions === null) return
+        if (modelOptions === null) {
+          // Still loading (or stalled): retry and keep the button usable.
+          setModelOptionsTick((tick) => tick + 1)
+          setNotice(t('commit.modelBusy'))
+          return
+        }
         openModelPicker(event.currentTarget, modelOptions, modelChoice, sessionId, (next) => {
           setModelChoice(next)
           writeStoredModelChoice(next)
@@ -4841,7 +4908,7 @@ window.__ModuleLoader__.load({
               className: 'gdt-btn gdt-branch-btn gdt-model-btn',
               'data-dsh-git-dock-model': '1',
               title: t('commit.modelHint'),
-              disabled: commitBusy || modelOptions === null,
+              disabled: commitBusy,
               onClick: openCommitModelPicker,
             },
             h('span', { className: 'gdt-model-name' }, modelSelectionLabel),

@@ -2271,9 +2271,18 @@ async function listModelOptions(ctx, body) {
   if (llm === undefined || llm === null || typeof llm.listProviders !== 'function') {
     throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
   }
-  const providers = await Promise.resolve(llm.listProviders())
+  const deadline = Date.now() + 8_000
+  // A stalled provider probe must not keep the picker empty forever.
+  const providers = await Promise.race([
+    Promise.resolve(llm.listProviders()),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve([]), 4_000)
+      if (typeof timer.unref === 'function') timer.unref()
+    }),
+  ])
   const entries = []
   for (const providerInfo of Array.isArray(providers) ? providers : []) {
+    if (Date.now() > deadline) break
     const providerCandidates = providerInfo !== null && typeof providerInfo === 'object'
       ? [providerInfo.provider, providerInfo.id, providerInfo.route, providerInfo.name]
       : [providerInfo]
@@ -2284,7 +2293,14 @@ async function listModelOptions(ctx, body) {
       : provider
     let models = []
     try {
-      models = await Promise.resolve(llm.listModels(provider))
+      const budget = Math.max(500, Math.min(4_000, deadline - Date.now()))
+      models = await Promise.race([
+        Promise.resolve(llm.listModels(provider)),
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve([]), budget)
+          if (typeof timer.unref === 'function') timer.unref()
+        }),
+      ])
     } catch {
       models = []
     }
