@@ -2981,8 +2981,10 @@ window.__ModuleLoader__.load({
       const [repositoryEntries, setRepositoryEntries] = React.useState(null)
       const [repoMenu, setRepoMenu] = React.useState(null)
       const [modelMenu, setModelMenu] = React.useState(null)
+      const [modelSubmenu, setModelSubmenu] = React.useState(null)
       const [modelMenuEfforts, setModelMenuEfforts] = React.useState([])
       const modelMenuRef = React.useRef(null)
+      const modelSubmenuRef = React.useRef(null)
       const [repoInput, setRepoInput] = React.useState('')
       const [repoBusy, setRepoBusy] = React.useState(false)
       const [repoError, setRepoError] = React.useState(null)
@@ -3032,14 +3034,19 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (modelMenu === null) return undefined
         const onPointerDown = (event) => {
-          const node = modelMenuRef.current
-          if (node !== null && node.contains(event.target)) return
+          const root = modelMenuRef.current
+          const submenu = modelSubmenuRef.current
+          if (root !== null && root.contains(event.target)) return
+          if (submenu !== null && submenu.contains(event.target)) return
           const target = event.target
           if (target !== null && typeof target.closest === 'function' && target.closest('[data-dsh-git-dock-model]') !== null) return
           setModelMenu(null)
+          setModelSubmenu(null)
         }
         const onKeyDown = (event) => {
-          if (event.key === 'Escape') setModelMenu(null)
+          if (event.key !== 'Escape') return
+          if (modelSubmenu !== null) setModelSubmenu(null)
+          else setModelMenu(null)
         }
         document.addEventListener('mousedown', onPointerDown, true)
         document.addEventListener('keydown', onKeyDown, true)
@@ -3047,7 +3054,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('mousedown', onPointerDown, true)
           document.removeEventListener('keydown', onKeyDown, true)
         }
-      }, [modelMenu])
+      }, [modelMenu, modelSubmenu])
       const [undoDiscard, setUndoDiscard] = React.useState(null)
       const [abortConfirm, setAbortConfirm] = React.useState(false)
       // ── A4: history / branch maintenance / advanced Git state ─────────────
@@ -3586,16 +3593,17 @@ window.__ModuleLoader__.load({
       })()
 
       const openCommitModelPicker = async (event) => {
-        // Inline menu (same mechanism as the repository menu) so the selector
-        // never depends on a separate overlay registration.
+        // Two-level inline menu: a summary panel with 模型 / 推理等级 rows, and a
+        // separate dropdown list opened from either row.
         const rect = event.currentTarget.getBoundingClientRect()
         const nextOpen = modelMenu === null
+        setModelSubmenu(null)
         setModelMenu(nextOpen
           ? {
-            left: Math.max(8, Math.min(rect.left, (typeof window === 'undefined' ? 0 : window.innerWidth) - 340)),
+            left: Math.max(8, Math.min(rect.left, (typeof window === 'undefined' ? 0 : window.innerWidth) - 280)),
             top: Math.max(8, Math.min(rect.top > (typeof window === 'undefined' ? 0 : window.innerHeight) / 2
-              ? rect.top - 320
-              : rect.bottom + 6, (typeof window === 'undefined' ? 0 : window.innerHeight) - 320)),
+              ? rect.top - 160
+              : rect.bottom + 6, (typeof window === 'undefined' ? 0 : window.innerHeight) - 160)),
           }
           : null)
         if (!nextOpen) return
@@ -3614,7 +3622,22 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const closeModelMenu = () => setModelMenu(null)
+      /** Open the model or effort list next to the summary panel. */
+      const openModelSubmenu = (kind, event) => {
+        const rect = event.currentTarget.getBoundingClientRect()
+        const width = 280
+        const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth
+        const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
+        const panelLeft = modelMenu === null ? rect.left : modelMenu.left
+        const preferredLeft = panelLeft + 260 + 8
+        const left = preferredLeft + width <= viewportWidth - 8 ? preferredLeft : Math.max(8, panelLeft - width - 8)
+        setModelSubmenu({ kind, left, top: Math.max(8, Math.min(rect.top, viewportHeight - 260)) })
+      }
+
+      const closeModelMenu = () => {
+        setModelMenu(null)
+        setModelSubmenu(null)
+      }
 
       const applyModelFromMenu = (provider, model, reasoningEffort) => {
         if (provider === null) {
@@ -3626,6 +3649,7 @@ window.__ModuleLoader__.load({
           writeStoredModelChoice(next)
         }
         setModelMenu(null)
+        setModelSubmenu(null)
       }
 
       const draftMessage = async () => {
@@ -4937,63 +4961,89 @@ window.__ModuleLoader__.load({
             ? modelOptions.current
             : null
         const activeEffort = active === null ? null : active.reasoningEffort ?? null
-        return h('div', {
+        const activeModelName = active === null
+          ? t('commit.modelBusy')
+          : (flat.find((entry) => entry.provider === active.provider && entry.model === active.model)?.name ?? active.model)
+        const activeEffortName = activeEffort === null
+          ? t('commit.effortAuto')
+          : (modelMenuEfforts.find((effort) => effort.id === activeEffort)?.name ?? activeEffort)
+
+        const rootRow = (key, label, value, kind) => h('div', {
+          key,
+          className: 'gdt-mp-row',
+          role: 'button',
+          tabIndex: 0,
+          'aria-haspopup': 'listbox',
+          'data-active': modelSubmenu !== null && modelSubmenu.kind === kind ? 'true' : 'false',
+          onClick: (event) => openModelSubmenu(kind, event),
+        },
+        h('span', { className: 'gdt-mp-label' }, label),
+        h('span', { className: 'gdt-mp-value' },
+          h('span', { className: 'gdt-mp-text' }, value),
+          h('span', { className: 'gdt-mp-caret' }, '›')))
+
+        const childRow = (key, label, selected, onPick, sub) => h('div', {
+          key,
+          className: 'gdt-popup-row',
+          role: 'button',
+          tabIndex: 0,
+          'data-active': selected ? 'true' : 'false',
+          onClick: onPick,
+        },
+        h('span', { className: 'gdt-mp-label' }, label),
+        sub === undefined || sub === '' ? null : h('span', { className: 'gdt-popup-sub' }, sub),
+        selected ? h('span', { className: 'gdt-mp-check' }, '✓') : null)
+
+        const root = h('div', {
           ref: modelMenuRef,
           className: 'gdt-popup',
-          style: { left: `${modelMenu.left}px`, top: `${modelMenu.top}px`, maxHeight: 'min(460px,80vh)' },
+          style: { left: `${modelMenu.left}px`, top: `${modelMenu.top}px`, width: '260px', maxHeight: 'min(320px,80vh)' },
         },
         h('div', { className: 'gdt-popup-body' },
-          h('div', { className: 'gdt-popup-title' }, t('commit.modelTitle')),
-          h('div', {
-            className: 'gdt-popup-row',
-            role: 'button',
-            tabIndex: 0,
-            'data-active': modelChoice === null ? 'true' : 'false',
-            onClick: () => applyModelFromMenu(null, null, null),
-          },
-          h('span', { className: 'gdt-mp-label' }, t('commit.modelFollow')),
-          h('span', { className: 'gdt-popup-sub' }, modelOptions?.current?.model ?? '')),
-          modelOptions === null
-            ? h('div', { className: 'gdt-note' }, `${t('panel.loading')} `,
-              h('button', { type: 'button', className: 'gdt-btn', onClick: () => void reloadModelOptions() }, t('tab.refresh')))
-            : flat.length === 0
-              ? h('div', { className: 'gdt-note' }, `${t('commit.modelUnavailable')} `,
-                h('button', { type: 'button', className: 'gdt-btn', onClick: () => void reloadModelOptions() }, t('tab.refresh')))
-              : flat.map((entry) => h('div', {
-                key: `${entry.provider}/${entry.model}`,
-                className: 'gdt-popup-row',
-                role: 'button',
-                tabIndex: 0,
-                'data-active': active !== null && active.provider === entry.provider && active.model === entry.model ? 'true' : 'false',
-                onClick: () => applyModelFromMenu(entry.provider, entry.model, null),
-              },
-              h('span', { className: 'gdt-mp-label' }, entry.name),
-              h('span', { className: 'gdt-popup-sub' }, entry.providerName))),
-          h('div', { className: 'gdt-popup-sep' }),
-          h('div', { className: 'gdt-popup-title' }, t('commit.effort')),
-          h('div', {
-            className: 'gdt-popup-row',
-            role: 'button',
-            tabIndex: 0,
-            'data-active': activeEffort === null ? 'true' : 'false',
-            onClick: () => {
-              if (active === null) return
-              applyModelFromMenu(active.provider, active.model, null)
-            },
-          }, h('span', { className: 'gdt-mp-label' }, t('commit.effortAuto'))),
-          modelMenuEfforts.map((effort) => h('div', {
-            key: `effort-${effort.id}`,
-            className: 'gdt-popup-row',
-            role: 'button',
-            tabIndex: 0,
-            'data-active': activeEffort === effort.id ? 'true' : 'false',
-            onClick: () => {
-              if (active === null) return
-              applyModelFromMenu(active.provider, active.model, effort.id)
-            },
-          }, h('span', { className: 'gdt-mp-label' }, effort.name))),
+          rootRow('model', t('commit.modelTitle'), activeModelName, 'models'),
+          rootRow('effort', t('commit.effort'), activeEffortName, 'efforts'),
           h('div', { className: 'gdt-popup-sep' }),
           h('button', { type: 'button', className: 'gdt-btn', onClick: closeModelMenu }, t('panel.cancel'))))
+
+        const submenu = modelSubmenu === null ? null : (() => {
+          const body = modelSubmenu.kind === 'models'
+            ? [
+              childRow('follow', t('commit.modelFollow'), modelChoice === null, () => applyModelFromMenu(null, null, null), modelOptions?.current?.model ?? ''),
+              modelOptions === null
+                ? h('div', { key: 'loading', className: 'gdt-note' }, `${t('panel.loading')} `,
+                  h('button', { type: 'button', className: 'gdt-btn', onClick: () => void reloadModelOptions() }, t('tab.refresh')))
+                : flat.length === 0
+                  ? h('div', { key: 'empty', className: 'gdt-note' }, `${t('commit.modelUnavailable')} `,
+                    h('button', { type: 'button', className: 'gdt-btn', onClick: () => void reloadModelOptions() }, t('tab.refresh')))
+                  : flat.map((entry) => childRow(
+                    `${entry.provider}/${entry.model}`,
+                    entry.name,
+                    active !== null && active.provider === entry.provider && active.model === entry.model,
+                    () => applyModelFromMenu(entry.provider, entry.model, entry.provider === active?.provider && entry.model === active?.model ? activeEffort : null),
+                    entry.providerName,
+                  )),
+            ]
+            : [
+              childRow('effort-auto', t('commit.effortAuto'), activeEffort === null, () => {
+                if (active === null) return
+                applyModelFromMenu(active.provider, active.model, null)
+              }),
+              ...modelMenuEfforts.map((effort) => childRow(`effort-${effort.id}`, effort.name, activeEffort === effort.id, () => {
+                if (active === null) return
+                applyModelFromMenu(active.provider, active.model, effort.id)
+              })),
+            ]
+          return h('div', {
+            ref: modelSubmenuRef,
+            className: 'gdt-popup',
+            style: { left: `${modelSubmenu.left}px`, top: `${modelSubmenu.top}px`, width: '280px', maxHeight: 'min(320px,80vh)' },
+          },
+          h('div', { className: 'gdt-popup-body' },
+            h('div', { className: 'gdt-popup-title' }, modelSubmenu.kind === 'models' ? t('commit.modelTitle') : t('commit.effort')),
+            body))
+        })()
+
+        return h(React.Fragment, null, root, submenu)
       })()
 
       const menuPopup = repoMenu === null ? null : h('div', {
