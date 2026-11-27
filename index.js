@@ -1894,12 +1894,11 @@ async function resolveConflict(ctx, body, signal) {
  */
 async function notifyAgentResolveConflicts(ctx, body, signal) {
   const state = await readRepoState(ctx, body.sessionId, signal)
-  const failure = body.error !== null && typeof body.error === 'object' ? body.error : null
-  if (state.operation !== 'merge' && failure === null) {
+  if (state.operation !== 'merge') {
     throw new ApiError('no-merge', 'no merge is in progress', 409, { state })
   }
   const allConflicts = state.conflictPaths
-  if (allConflicts.length === 0 && failure === null) {
+  if (allConflicts.length === 0) {
     throw new ApiError('no-conflicts', 'no conflicted files remain; complete the merge instead', 409, { state })
   }
   // An explicit path list narrows the request to the file the user picked; an
@@ -1923,48 +1922,24 @@ async function notifyAgentResolveConflicts(ctx, body, signal) {
     throw new ApiError('agent-unavailable', 'this session cannot accept a prompt right now', 503)
   }
   const remaining = allConflicts.filter((path) => !conflicts.includes(path))
-  const failureLines = failure === null
-    ? []
-    : [
-      '',
-      'Git 命令执行失败，错误信息如下：',
-      `- code: ${typeof failure.code === 'string' ? failure.code : 'merge-failed'}`,
-      `- message: ${typeof failure.message === 'string' ? failure.message : ''}`,
-      ...(failure.details !== null && failure.details !== undefined
-        ? [`- detail: ${String(typeof failure.details === 'string' ? failure.details : JSON.stringify(failure.details)).slice(0, 3_000)}`]
-        : []),
-    ]
   const prompt = [
-    conflicts.length === 0
-      ? '用户尝试合并分支时 Git 命令执行失败，工作区当前没有可列出的冲突文件。'
-      : '当前会话的工作区处于 Git 合并冲突状态，请立即处理以下冲突文件。',
+    '当前会话的工作区处于 Git 合并冲突状态，请立即处理以下冲突文件。',
     `仓库：${state.repoRoot}`,
     `当前分支：${state.branch ?? 'detached HEAD'}`,
-    ...(conflicts.length === 0
-      ? []
-      : [`本次需要处理的冲突文件（${conflicts.length} 个）：`, ...conflicts.map((path) => `- ${path}`)]),
+    `本次需要处理的冲突文件（${conflicts.length} 个）：`,
+    ...conflicts.map((path) => `- ${path}`),
     ...(remaining.length === 0
       ? []
       : ['', `其余仍未解决的冲突（本次不处理）：`, ...remaining.map((path) => `- ${path}`)]),
-    ...failureLines,
     '',
     '要求：',
-    '1. 先读取 `git status` 与相关文件，判断合并失败或冲突的原因；',
-    '2. 逐个读取冲突文件，理解双方意图，合并两边改动，保留全部有效逻辑；',
-    '3. 解决后用 `git add <该文件>` 标记为已解决；若不是冲突而是工作区阻塞（未提交改动等），先妥善处理阻塞再继续合并；',
-    '4. 不要执行 git commit、git push，也不要改动无关文件；',
-    '5. 处理完成后，简短汇报失败原因与每个文件的处理方式。',
+    '1. 逐个读取冲突文件，理解双方意图，合并两边改动，保留全部有效逻辑；',
+    '2. 解决后用 `git add <该文件>` 标记为已解决；',
+    '3. 不要执行 git commit、git merge --abort、git push，也不要改动无关文件；',
+    '4. 全部标记完成后，简短汇报每个文件是如何处理的。',
   ].join('\n')
-  // Persisted user messages must be identified: the session store rejects an
-  // event whose message lacks `id` / `role`, which would corrupt the log.
-  const message = {
-    id: randomUUID(),
-    role: 'user',
-    source: { kind: 'user' },
-    content: [{ type: 'text', text: prompt }],
-  }
-  await agent.followup(message)
-  return { notified: true, conflicts, remaining, failure: failure !== null, branch: state.branch ?? null }
+  await agent.followup({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })
+  return { notified: true, conflicts, remaining, branch: state.branch ?? null }
 }
 
 // ── P3: refs, checkout, staging, commit, remote ───────────────────────────
@@ -2296,18 +2271,9 @@ async function listModelOptions(ctx, body) {
   if (llm === undefined || llm === null || typeof llm.listProviders !== 'function') {
     throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
   }
-  const deadline = Date.now() + 8_000
-  // A stalled provider probe must not keep the picker empty forever.
-  const providers = await Promise.race([
-    Promise.resolve(llm.listProviders()),
-    new Promise((resolve) => {
-      const timer = setTimeout(() => resolve([]), 4_000)
-      if (typeof timer.unref === 'function') timer.unref()
-    }),
-  ])
+  const providers = await Promise.resolve(llm.listProviders())
   const entries = []
   for (const providerInfo of Array.isArray(providers) ? providers : []) {
-    if (Date.now() > deadline) break
     const providerCandidates = providerInfo !== null && typeof providerInfo === 'object'
       ? [providerInfo.provider, providerInfo.id, providerInfo.route, providerInfo.name]
       : [providerInfo]
@@ -2318,14 +2284,7 @@ async function listModelOptions(ctx, body) {
       : provider
     let models = []
     try {
-      const budget = Math.max(500, Math.min(4_000, deadline - Date.now()))
-      models = await Promise.race([
-        Promise.resolve(llm.listModels(provider)),
-        new Promise((resolve) => {
-          const timer = setTimeout(() => resolve([]), budget)
-          if (typeof timer.unref === 'function') timer.unref()
-        }),
-      ])
+      models = await Promise.resolve(llm.listModels(provider))
     } catch {
       models = []
     }

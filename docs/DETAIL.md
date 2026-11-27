@@ -108,10 +108,7 @@ switching and creating branches.
   The prompt names the chosen files, lists the remaining ones, and repeats the
   rules: resolve, `git add`, never commit/abort/push. Unknown paths are refused
   (`not-conflicted`); the conflict list, marker counts and manual resolve/abort
-  actions stay exactly as before. A failed `merge.apply` (including a dirty
-  worktree that never produced conflicts) also records its error and keeps the
-  same button active: one click forwards the git failure text plus the conflict
-  list to the agent, which diagnoses the blocker and resolves the merge.
+  actions stay exactly as before.
 - **History and advanced Git (A4)** — a fourth tab lists commits (path-filtered
   history supported) with author, date and subject; selecting a commit shows its
   changed files and, per file, the `git show` diff. A compare mode reports

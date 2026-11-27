@@ -336,7 +336,6 @@ window.__ModuleLoader__.load({
         'ai.hint': '把当前选中的冲突文件直接发送到会话，模型会自动开始处理',
         'ai.sending': '发送中…',
         'ai.sent': '已发送 {target} 到会话，模型开始处理',
-        'ai.sentFailure': '已把 Git 合并失败信息发送到会话，模型开始诊断',
         'ai.run': '生成合并建议',
         'ai.running': '生成中…',
         'ai.cancel': '取消',
@@ -699,7 +698,6 @@ window.__ModuleLoader__.load({
         'ai.hint': 'Send the selected conflict files straight to the conversation; the model starts resolving them',
         'ai.sending': 'Sending…',
         'ai.sent': 'Sent {target} to the conversation; the model is resolving it',
-        'ai.sentFailure': 'Sent the failed merge details to the conversation; the model is diagnosing',
         'ai.run': 'Generate merge suggestion',
         'ai.running': 'Generating…',
         'ai.cancel': 'Cancel',
@@ -1013,7 +1011,6 @@ window.__ModuleLoader__.load({
       // The floating panels are mutually exclusive.
       closePanel(false)
       closeBasePicker()
-      closeModelPicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setMergeState({
@@ -1103,44 +1100,16 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /* Last failed merge attempt, surfaced to the review tab so the AI handoff can
-     * include the git failure even when no conflict files were produced. */
-    const mergeFailureListeners = new Set()
-    let lastMergeFailure = null
-
-    function notifyMergeFailure(sessionId, failure) {
-      lastMergeFailure = failure === null ? null : { sessionId, failure }
-      for (const listener of mergeFailureListeners) {
-        try {
-          listener(sessionId, failure)
-        } catch {
-          // A broken subscriber must not break the others.
-        }
-      }
-    }
-
-    function onMergeFailure(listener) {
-      mergeFailureListeners.add(listener)
-      return () => mergeFailureListeners.delete(listener)
-    }
-
     async function applyMergeFromPicker() {
       const { sessionId, preview, pending } = mergePicker
       if (sessionId === null || preview === null || pending) return
       setMergeState({ pending: true, actionError: null })
       try {
         await callApi('merge.apply', { sessionId, confirmToken: preview.confirmToken, confirmed: true })
-        notifyMergeFailure(sessionId, null)
         closeMergePicker()
         notifyRepoChanged(sessionId)
       } catch (thrown) {
         setMergeState({ pending: false, actionError: { code: thrown.code, message: thrown.message } })
-        notifyMergeFailure(sessionId, {
-          code: thrown.code,
-          message: thrown.message,
-          details: thrown.details ?? null,
-        })
-        notifyRepoChanged(sessionId)
       }
     }
 
@@ -1254,7 +1223,6 @@ window.__ModuleLoader__.load({
     function openBasePicker(sessionId, element, names, current, onSelect) {
       closeMergePicker()
       closePanel(false)
-      closeModelPicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       setBaseState({
@@ -1311,131 +1279,11 @@ window.__ModuleLoader__.load({
       if (typeof select === 'function') select(name)
     }
 
-    // ── Commit-message model picker store ────────────────────────────────────
-
-    const COMMIT_MODEL_KEY = 'dsh-git-dock:commit-model'
-
-    /** Read the last picked commit-message model (persisted across openings). */
-    function readStoredModelChoice() {
-      try {
-        if (typeof localStorage === 'undefined') return null
-        const raw = localStorage.getItem(COMMIT_MODEL_KEY)
-        if (raw === null) return null
-        const value = JSON.parse(raw)
-        if (value === null || typeof value !== 'object') return null
-        const provider = typeof value.provider === 'string' && value.provider !== '' ? value.provider : null
-        const model = typeof value.model === 'string' && value.model !== '' ? value.model : null
-        if (provider === null || model === null) return null
-        const reasoningEffort = typeof value.reasoningEffort === 'string' && value.reasoningEffort !== ''
-          ? value.reasoningEffort
-          : null
-        return { provider, model, reasoningEffort }
-      } catch {
-        return null
-      }
-    }
-
-    /** Persist (or clear, when following the conversation again) that choice. */
-    function writeStoredModelChoice(choice) {
-      try {
-        if (typeof localStorage === 'undefined') return
-        if (choice === null) localStorage.removeItem(COMMIT_MODEL_KEY)
-        else localStorage.setItem(COMMIT_MODEL_KEY, JSON.stringify(choice))
-      } catch {
-        // Storage can be unavailable; the choice still applies to this tab.
-      }
-    }
-
-    let modelPicker = {
-      open: false,
-      anchor: null,
-      options: null,
-      choice: null,
-      status: 'idle',
-      error: null,
-      onApply: null,
-    }
-
-    const modelPickerListeners = new Set()
-
-    function getModelState() {
-      return modelPicker
-    }
-
-    function subscribeModel(listener) {
-      modelPickerListeners.add(listener)
-      return () => modelPickerListeners.delete(listener)
-    }
-
-    function setModelState(patch) {
-      modelPicker = Object.assign({}, modelPicker, patch)
-      for (const listener of modelPickerListeners) {
-        try {
-          listener()
-        } catch {
-          // A broken subscriber must not break the others.
-        }
-      }
-    }
-
-    function useModelStore() {
-      if (typeof React.useSyncExternalStore === 'function') {
-        return React.useSyncExternalStore(subscribeModel, getModelState)
-      }
-      const [, force] = React.useState(0)
-      React.useEffect(() => subscribeModel(() => force((value) => value + 1)), [])
-      return modelPicker
-    }
-
-    /** Open the model/effort dropdown above the commit bar. */
-    function openModelPicker(element, options, choice, sessionId, onApply) {
-      closeMergePicker()
-      closeBasePicker()
-      closePanel(false)
-      const rect = element.getBoundingClientRect()
-      const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
-      setModelState({
-        open: true,
-        sessionId,
-        anchor: {
-          left: rect.left,
-          top: rect.top,
-          right: rect.right,
-          bottom: rect.bottom,
-          placement: rect.top > viewportHeight * 0.5 ? 'above' : 'below',
-        },
-        options,
-        choice,
-        status: options === null ? 'loading' : 'ready',
-        error: null,
-        onApply,
-      })
-    }
-
-    function closeModelPicker() {
-      setModelState({ open: false, sessionId: null, anchor: null, options: null, onApply: null, error: null, status: 'idle' })
-    }
-
-    /** Apply a choice (null means "follow the conversation") and close. */
-    function applyModelChoice(choice) {
-      const apply = modelPicker.onApply
-      closeModelPicker()
-      if (typeof apply === 'function') apply(choice)
-    }
-
-    /** Decide with one click: keep the panel open for the effort step. */
-    function pickModelInPanel(choice) {
-      setModelState({ choice })
-      const apply = modelPicker.onApply
-      if (typeof apply === 'function') apply(choice)
-    }
-
-    /** Open the panel anchored at the chip element. */
+/** Open the panel anchored at the chip element. */
     function openPanel(sessionId, element) {
       // The floating panels are mutually exclusive.
       closeMergePicker()
       closeBasePicker()
-      closeModelPicker()
       const rect = element.getBoundingClientRect()
       const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
       lastChipElement = element
@@ -2684,234 +2532,38 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dgd-body' }, body))
     }
 
-    // ── Commit-message model picker overlay ────────────────────────────────
+    /** localStorage key of the remembered commit-message model choice. */
+    const COMMIT_MODEL_KEY = 'dsh-git-dock:commit-model'
 
-    function ModelPicker() {
-      useLang()
-      const snapshot = useModelStore()
-      const panelRef = React.useRef(null)
-      const [submenu, setSubmenu] = React.useState(null)
-      const [effortsCache, setEffortsCache] = React.useState(null)
-      const choiceKey = snapshot.choice == null ? null : `${snapshot.choice.provider}/${snapshot.choice.model}`
-      const currentOption = snapshot.options == null ? null : snapshot.options.current ?? null
-      const currentKey = currentOption == null ? null : `${currentOption.provider}/${currentOption.model}`
-      React.useEffect(() => {
-        if (snapshot.open !== true) return undefined
-        const key = choiceKey ?? currentKey
-        if (key === null) return undefined
-        const split = key.indexOf('/')
-        const provider = key.slice(0, split)
-        const model = key.slice(split + 1)
-        let cancelled = false
-        setEffortsCache({ key, status: 'loading', efforts: [], defaultEffort: null })
-        void (async () => {
-          try {
-            const value = await callApi('modelInfo', { sessionId: snapshot.sessionId, provider, model })
-            if (!cancelled) {
-              setEffortsCache({ key, status: 'ready', efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
-            }
-          } catch {
-            if (!cancelled) setEffortsCache({ key, status: 'error', efforts: [], defaultEffort: null })
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [snapshot.open, snapshot.sessionId, choiceKey, currentKey])
-      React.useEffect(() => {
-        ensureStyle()
-      }, [])
-      React.useEffect(() => {
-        setSubmenu(null)
-      }, [snapshot.open])
-      React.useEffect(() => {
-        if (snapshot.open !== true) return undefined
-        const onPointerDown = (event) => {
-          const node = panelRef.current
-          if (node !== null && node.contains(event.target)) return
-          const target = event.target
-          if (target !== null && typeof target.closest === 'function'
-            && (target.closest(`[${CHIP_ATTR}]`) !== null
-              || target.closest('[data-dsh-git-dock-merge]') !== null
-              || target.closest('[data-dsh-git-dock-base]') !== null
-              || target.closest('[data-dsh-git-dock-model]') !== null)) return
-          closeModelPicker()
-        }
-        const onKeyDown = (event) => {
-          if (event.key !== 'Escape') return
-          event.stopPropagation()
-          closeModelPicker()
-        }
-        const onResize = () => closeModelPicker()
-        document.addEventListener('mousedown', onPointerDown, true)
-        document.addEventListener('keydown', onKeyDown, true)
-        window.addEventListener('resize', onResize)
-        return () => {
-          document.removeEventListener('mousedown', onPointerDown, true)
-          document.removeEventListener('keydown', onKeyDown, true)
-          window.removeEventListener('resize', onResize)
-        }
-      }, [snapshot.open])
-
-      if (snapshot.open !== true || snapshot.anchor === null) return null
-      const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth
-      const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight
-      const width = Math.max(240, Math.min(320, viewportWidth - 16))
-      const left = Math.max(8, Math.min(snapshot.anchor.left, viewportWidth - width - 8))
-      const below = snapshot.anchor.placement === 'below'
-      const panelTop = Math.max(8, snapshot.anchor.bottom + 8)
-      const bottom = Math.max(8, viewportHeight - snapshot.anchor.top + 8)
-      const maxHeight = below
-        ? Math.min(420, Math.max(200, viewportHeight - snapshot.anchor.bottom - 24))
-        : Math.min(420, Math.max(200, snapshot.anchor.top - 24))
-
-      const options = snapshot.options
-      const flat = []
-      if (options !== null) {
-        for (const provider of options.providers ?? []) {
-          for (const model of provider.models ?? []) {
-            flat.push({
-              provider: provider.provider,
-              providerName: provider.name ?? provider.provider,
-              model: model.model,
-              name: model.name ?? model.model,
-              efforts: model.efforts ?? [],
-            })
-          }
-        }
-      }
-      const effortKey = choiceKey ?? currentKey
-      const fetchedEfforts = effortKey !== null && effortsCache !== null && effortsCache.key === effortKey ? effortsCache : null
-      const conversationCurrent = options === null || options.current === null || options.current === undefined
-        ? null
-        : {
-          provider: options.current.provider,
-          model: options.current.model,
-          name: (flat.find((entry) => entry.provider === options.current.provider && entry.model === options.current.model) ?? { name: options.current.model }).name,
-          efforts: (flat.find((entry) => entry.provider === options.current.provider && entry.model === options.current.model) ?? { efforts: [] }).efforts,
-        }
-      const selectedModel = snapshot.choice === null
-        ? null
-        : flat.find((entry) => entry.provider === snapshot.choice.provider && entry.model === snapshot.choice.model) ?? {
-          provider: snapshot.choice.provider,
-          model: snapshot.choice.model,
-          name: snapshot.choice.model,
-          efforts: [],
-        }
-      const active = selectedModel ?? conversationCurrent
-      const activeEffortId = snapshot.choice !== null
-        ? snapshot.choice.reasoningEffort ?? null
-        : options !== null && options.current !== null && options.current !== undefined
-          ? options.current.reasoningEffort ?? null
+    /** Read the last picked commit-message model (persisted across openings). */
+    function readStoredModelChoice() {
+      try {
+        if (typeof localStorage === 'undefined') return null
+        const raw = localStorage.getItem(COMMIT_MODEL_KEY)
+        if (raw === null) return null
+        const value = JSON.parse(raw)
+        if (value === null || typeof value !== 'object') return null
+        const provider = typeof value.provider === 'string' && value.provider !== '' ? value.provider : null
+        const model = typeof value.model === 'string' && value.model !== '' ? value.model : null
+        if (provider === null || model === null) return null
+        const reasoningEffort = typeof value.reasoningEffort === 'string' && value.reasoningEffort !== ''
+          ? value.reasoningEffort
           : null
-      const availableEfforts = (active?.efforts ?? []).length > 0 ? active.efforts : (fetchedEfforts?.efforts ?? [])
-      const effortLabel = (id) => {
-        if (id === null || id === undefined || id === '') {
-          const fallback = fetchedEfforts === null ? null : fetchedEfforts.defaultEffort
-          if (fallback === null || fallback === undefined) return t('commit.effortAuto')
-          const effort = availableEfforts.find((entry) => entry.id === fallback)
-          return `${t('commit.effortAuto')} · ${effort === undefined ? fallback : effort.name}`
-        }
-        const effort = availableEfforts.find((entry) => entry.id === id)
-        return effort === undefined ? id : effort.name
+        return { provider, model, reasoningEffort }
+      } catch {
+        return null
       }
-      const followBase = conversationCurrent === null
-        ? null
-        : { provider: conversationCurrent.provider, model: conversationCurrent.model, reasoningEffort: null }
-      const pickFollow = () => {
-        setModelState({ choice: null })
-        if (typeof snapshot.onApply === 'function') snapshot.onApply(null)
-        setSubmenu(null)
+    }
+
+    /** Persist (or clear, when following the conversation again) that choice. */
+    function writeStoredModelChoice(choice) {
+      try {
+        if (typeof localStorage === 'undefined') return
+        if (choice === null) localStorage.removeItem(COMMIT_MODEL_KEY)
+        else localStorage.setItem(COMMIT_MODEL_KEY, JSON.stringify(choice))
+      } catch {
+        // Storage can be unavailable; the choice still applies to this tab.
       }
-      const pickModel = (entry) => {
-        const keepEffort = snapshot.choice !== null && snapshot.choice.provider === entry.provider && snapshot.choice.model === entry.model
-          ? snapshot.choice.reasoningEffort
-          : null
-        pickModelInPanel({ provider: entry.provider, model: entry.model, reasoningEffort: keepEffort })
-        setSubmenu(null)
-      }
-      const pickEffort = (id) => {
-        const base = snapshot.choice ?? followBase
-        if (base === null) return
-        pickModelInPanel(Object.assign({}, base, { reasoningEffort: id }))
-        setSubmenu(null)
-      }
-
-      const headerRow = (label, value, open, onActivate) => h('div', {
-        className: 'gdt-mp-row',
-        role: 'button',
-        tabIndex: 0,
-        'aria-expanded': open ? 'true' : 'false',
-        onClick: onActivate,
-        onKeyDown: (event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return
-          event.preventDefault()
-          onActivate()
-        },
-      },
-      h('span', { className: 'gdt-mp-label' }, label),
-      h('span', { className: 'gdt-mp-value' },
-        h('span', { className: 'gdt-mp-text' }, value),
-        h('span', { className: 'gdt-mp-caret' }, open ? '▴' : '▾')))
-
-      const choiceRow = (key, label, selected, handle) => h('div', {
-        key,
-        className: 'gdt-mp-row',
-        role: 'button',
-        tabIndex: 0,
-        'data-current': selected ? 'true' : 'false',
-        onClick: handle,
-        onKeyDown: (event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return
-          event.preventDefault()
-          handle()
-        },
-      },
-      h('span', { className: 'gdt-mp-label' }, label),
-      selected ? h('span', { className: 'gdt-mp-check' }, '✓') : null)
-
-      const modelChoices = [
-        choiceRow('follow', t('commit.modelFollow'), snapshot.choice === null, pickFollow),
-        ...flat.map((entry) => choiceRow(
-          `model:${entry.provider}/${entry.model}`,
-          entry.name,
-          snapshot.choice !== null && snapshot.choice.provider === entry.provider && snapshot.choice.model === entry.model,
-          () => pickModel(entry),
-        )),
-      ]
-      const effortChoices = active === null
-        ? [h('div', { key: 'effort-empty', className: 'dgd-empty' }, t('commit.modelUnavailable'))]
-        : [
-          choiceRow('effort:auto', t('commit.effortAuto'), activeEffortId === null, () => pickEffort(null)),
-          ...availableEfforts.map((effort) => choiceRow(
-            `effort:${effort.id}`,
-            effort.name,
-            activeEffortId === effort.id,
-            () => pickEffort(effort.id),
-          )),
-          fetchedEfforts !== null && fetchedEfforts.status === 'loading' && availableEfforts.length === 0
-            ? h('div', { key: 'effort-loading', className: 'gdt-mp-row' },
-              h('span', { className: 'gdt-mp-label' }, t('panel.loading')), null)
-            : null,
-        ].filter((node) => node !== null)
-
-      return h('div', {
-        ref: panelRef,
-        className: 'dgd-panel',
-        style: below
-          ? { left: `${left}px`, top: `${panelTop}px`, width: `${width}px`, maxHeight: `${maxHeight}px` }
-          : { left: `${left}px`, bottom: `${bottom}px`, width: `${width}px`, maxHeight: `${maxHeight}px` },
-        role: 'dialog',
-        'aria-label': t('commit.modelTitle'),
-      },
-      h('div', { className: 'dgd-body' },
-        options === null
-          ? h('div', { className: 'dgd-empty' }, t('commit.modelBusy'))
-          : h('div', null,
-            headerRow(t('commit.modelTitle'), active === null ? t('commit.modelBusy') : active.name, submenu === 'model', () => setSubmenu(submenu === 'model' ? null : 'model')),
-            submenu === 'model' ? h('div', { className: 'gdt-mp-list' }, modelChoices) : null,
-            headerRow(t('commit.effort'), active === null ? '' : effortLabel(activeEffortId), submenu === 'effort', () => setSubmenu(submenu === 'effort' ? null : 'effort')),
-            submenu === 'effort' ? h('div', { className: 'gdt-mp-list' }, effortChoices) : null)))
     }
 
     // ── Changes tab (sidebar.right.pane.tab) ──────────────────────────────
@@ -3262,6 +2914,9 @@ window.__ModuleLoader__.load({
       const [narrow, setNarrow] = React.useState(false)
       const [repositoryEntries, setRepositoryEntries] = React.useState(null)
       const [repoMenu, setRepoMenu] = React.useState(null)
+      const [modelMenu, setModelMenu] = React.useState(null)
+      const [modelMenuEfforts, setModelMenuEfforts] = React.useState([])
+      const modelMenuRef = React.useRef(null)
       const [repoInput, setRepoInput] = React.useState('')
       const [repoBusy, setRepoBusy] = React.useState(false)
       const [repoError, setRepoError] = React.useState(null)
@@ -3308,6 +2963,25 @@ window.__ModuleLoader__.load({
           document.removeEventListener('keydown', onKeyDown, true)
         }
       }, [repoMenu])
+      React.useEffect(() => {
+        if (modelMenu === null) return undefined
+        const onPointerDown = (event) => {
+          const node = modelMenuRef.current
+          if (node !== null && node.contains(event.target)) return
+          const target = event.target
+          if (target !== null && typeof target.closest === 'function' && target.closest('[data-dsh-git-dock-model]') !== null) return
+          setModelMenu(null)
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') setModelMenu(null)
+        }
+        document.addEventListener('mousedown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+        }
+      }, [modelMenu])
       const [undoDiscard, setUndoDiscard] = React.useState(null)
       const [abortConfirm, setAbortConfirm] = React.useState(false)
       // ── A4: history / branch maintenance / advanced Git state ─────────────
@@ -3329,99 +3003,21 @@ window.__ModuleLoader__.load({
       const [historyFileDiff, setHistoryFileDiff] = React.useState(null)
       // ── A5: one-click conflict handoff to the conversation ──────────────
       const [aiConflictBusy, setAiConflictBusy] = React.useState(false)
-      const [mergeFailure, setMergeFailure] = React.useState(null)
-      React.useEffect(() => {
-        return onMergeFailure((changedSession, failure) => {
-          if (changedSession === sessionId) setMergeFailure(failure)
-        })
-      }, [sessionId])
-      const [modelOptionsTick, setModelOptionsTick] = React.useState(0)
-
-      React.useEffect(() => {
-        if (sessionId === undefined) return undefined
-        let cancelled = false
-        const timeout = new Promise((resolve) => {
-          const timer = setTimeout(() => resolve({ timedOut: true }), 10_000)
-          if (typeof timer.unref === 'function') timer.unref()
-        })
-        void (async () => {
-          try {
-            const value = await Promise.race([callApi('modelOptions', { sessionId }), timeout])
-            if (cancelled) return
-            if (value !== null && typeof value === 'object' && value.timedOut === true) {
-              setModelOptions({ providers: [], current: null, timedOut: true })
-              return
-            }
-            setModelOptions(value)
-            setModelChoice((previous) => {
-              if (previous === null) return previous
-              const exists = (value.providers ?? []).some((provider) => provider.provider === previous.provider
-                && (provider.models ?? []).some((model) => model.model === previous.model))
-              if (exists) return previous
-              writeStoredModelChoice(null)
-              return null
-            })
-          } catch (thrown) {
-            if (!cancelled) {
-              setModelOptions({ providers: [], current: null, lastError: { code: thrown.code, message: thrown.message } })
-            }
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId, modelOptionsTick])
-
-      const labelRouteKey = modelChoice !== null
-        ? `${modelChoice.provider}/${modelChoice.model}`
-        : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
-          ? `${modelOptions.current.provider}/${modelOptions.current.model}`
-          : null
-      React.useEffect(() => {
-        if (sessionId === undefined || labelRouteKey === null) return undefined
-        const split = labelRouteKey.indexOf('/')
-        const provider = labelRouteKey.slice(0, split)
-        const model = labelRouteKey.slice(split + 1)
-        let cancelled = false
-        void (async () => {
-          try {
-            const value = await callApi('modelInfo', { sessionId, provider, model })
-            if (!cancelled) {
-              setActiveModelEfforts({ key: labelRouteKey, efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
-            }
-          } catch {
-            if (!cancelled) setActiveModelEfforts(null)
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId, labelRouteKey])
 
       /** Send the chosen conflict files to the session agent in one step. */
       const sendConflictsToAgent = async () => {
         if (aiConflictBusy) return
-        const targets = conflictPaths.includes(selected === null ? '' : selected.path)
+        const targets = conflictPaths.includes(selected === null ? "" : selected.path)
           ? [selected.path]
           : [...conflictPaths]
-        if (targets.length === 0 && mergeFailure === null) return
+        if (targets.length === 0) return
         setAiConflictBusy(true)
         setActionError(null)
         try {
-          const value = await callApi('merge.assist', {
-            sessionId,
-            paths: targets,
-            ...(mergeFailure === null
-              ? {}
-              : { error: { code: mergeFailure.code ?? 'merge-failed', message: mergeFailure.message ?? '', details: mergeFailure.details ?? null } }),
-          })
-          const label = targets.length === 0
-            ? t('ai.sentFailure')
-            : targets.length === 1 ? targets[0] : `${targets.length} 个冲突文件`
+          const value = await callApi('merge.assist', { sessionId, paths: targets })
+          const label = targets.length === 1 ? targets[0] : `${targets.length} 个冲突文件`
           setNotice(t('ai.sent', { target: label }))
-          setMergeFailure(null)
           notifyRepoChanged(sessionId)
-          void value
         } catch (thrown) {
           setActionError({ code: thrown.code, message: thrown.message })
         } finally {
@@ -3923,17 +3519,47 @@ window.__ModuleLoader__.load({
         return `${name}${effort}`
       })()
 
-      const openCommitModelPicker = (event) => {
-        if (modelOptions === null) {
-          // Still loading (or stalled): retry and keep the button usable.
-          setModelOptionsTick((tick) => tick + 1)
-          setNotice(t('commit.modelBusy'))
-          return
+      const openCommitModelPicker = async (event) => {
+        // Inline menu (same mechanism as the repository menu) so the selector
+        // never depends on a separate overlay registration.
+        const rect = event.currentTarget.getBoundingClientRect()
+        const nextOpen = modelMenu === null
+        setModelMenu(nextOpen
+          ? {
+            left: Math.max(8, Math.min(rect.left, (typeof window === 'undefined' ? 0 : window.innerWidth) - 340)),
+            top: Math.max(8, Math.min(rect.top > (typeof window === 'undefined' ? 0 : window.innerHeight) / 2
+              ? rect.top - 320
+              : rect.bottom + 6, (typeof window === 'undefined' ? 0 : window.innerHeight) - 320)),
+          }
+          : null)
+        if (!nextOpen) return
+        setModelMenuEfforts([])
+        const active = modelChoice !== null
+          ? modelChoice
+          : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
+            ? modelOptions.current
+            : null
+        if (active === null || sessionId === undefined) return
+        try {
+          const value = await callApi('modelInfo', { sessionId, provider: active.provider, model: active.model })
+          setModelMenuEfforts(Array.isArray(value.efforts) ? value.efforts : [])
+        } catch {
+          setModelMenuEfforts([])
         }
-        openModelPicker(event.currentTarget, modelOptions, modelChoice, sessionId, (next) => {
+      }
+
+      const closeModelMenu = () => setModelMenu(null)
+
+      const applyModelFromMenu = (provider, model, reasoningEffort) => {
+        if (provider === null) {
+          setModelChoice(null)
+          writeStoredModelChoice(null)
+        } else {
+          const next = { provider, model, reasoningEffort: reasoningEffort ?? null }
           setModelChoice(next)
           writeStoredModelChoice(next)
-        })
+        }
+        setModelMenu(null)
       }
 
       const draftMessage = async () => {
@@ -5070,7 +4696,7 @@ window.__ModuleLoader__.load({
           onClick: () => void toggleSyncLog(),
         }, t('sync.details'))) : null
 
-      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress && mergeFailure === null) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
+      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
           ? t('merge.openTitle', { n: conflictTypes.length })
           : t('merge.noConflicts')),
         hasConflicts
@@ -5093,16 +4719,13 @@ window.__ModuleLoader__.load({
               },
             }, t('merge.abortYes')))
           : null,
-        mergeFailure === null ? null : h('div', { className: 'gdt-error', role: 'alert' },
-          h('div', null, errorText({ code: mergeFailure.code ?? 'merge-failed', message: mergeFailure.message ?? '' })),
-          mergeFailure.message === undefined || mergeFailure.message === '' ? null : h('div', { className: 'gdt-summary', style: { marginTop: '4px' } }, String(mergeFailure.message).slice(0, 400))),
         mergeError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(mergeError)),
         h('div', { className: 'gct-actions' },
           h('button', {
             type: 'button',
             className: 'gdt-btn gdt-ai-btn',
             title: t('ai.hint'),
-            disabled: aiConflictBusy || (conflictPaths.length === 0 && mergeFailure === null),
+            disabled: aiConflictBusy || conflictPaths.length === 0,
             onClick: () => void sendConflictsToAgent(),
           }, aiConflictBusy ? t('ai.sending') : t('ai.title')),
           h('button', {
@@ -5234,6 +4857,76 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'gdt-btn', onClick: () => setDiscardTarget(null) }, t('panel.cancel')),
             h('button', { type: 'button', className: 'gdt-btn', onClick: () => void discardPaths() }, t('discard.confirmYes')))),
       ].filter((node) => node !== null)
+
+      const modelMenuPopup = modelMenu === null ? null : (() => {
+        const flat = []
+        for (const provider of modelOptions?.providers ?? []) {
+          for (const model of provider.models ?? []) {
+            flat.push({ provider: provider.provider, model: model.model, name: model.name ?? model.model, providerName: provider.name ?? provider.provider })
+          }
+        }
+        const active = modelChoice !== null
+          ? modelChoice
+          : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
+            ? modelOptions.current
+            : null
+        const activeEffort = active === null ? null : active.reasoningEffort ?? null
+        return h('div', {
+          ref: modelMenuRef,
+          className: 'gdt-popup',
+          style: { left: `${modelMenu.left}px`, top: `${modelMenu.top}px`, maxHeight: 'min(460px,80vh)' },
+        },
+        h('div', { className: 'gdt-popup-body' },
+          h('div', { className: 'gdt-popup-title' }, t('commit.modelTitle')),
+          h('div', {
+            className: 'gdt-popup-row',
+            role: 'button',
+            tabIndex: 0,
+            'data-active': modelChoice === null ? 'true' : 'false',
+            onClick: () => applyModelFromMenu(null, null, null),
+          },
+          h('span', { className: 'gdt-mp-label' }, t('commit.modelFollow')),
+          h('span', { className: 'gdt-popup-sub' }, modelOptions?.current?.model ?? '')),
+          modelOptions === null
+            ? h('div', { className: 'gdt-note' }, t('panel.loading'))
+            : flat.length === 0
+              ? h('div', { className: 'gdt-note' }, t('commit.modelUnavailable'))
+              : flat.map((entry) => h('div', {
+                key: `${entry.provider}/${entry.model}`,
+                className: 'gdt-popup-row',
+                role: 'button',
+                tabIndex: 0,
+                'data-active': active !== null && active.provider === entry.provider && active.model === entry.model ? 'true' : 'false',
+                onClick: () => applyModelFromMenu(entry.provider, entry.model, null),
+              },
+              h('span', { className: 'gdt-mp-label' }, entry.name),
+              h('span', { className: 'gdt-popup-sub' }, entry.providerName))),
+          h('div', { className: 'gdt-popup-sep' }),
+          h('div', { className: 'gdt-popup-title' }, t('commit.effort')),
+          h('div', {
+            className: 'gdt-popup-row',
+            role: 'button',
+            tabIndex: 0,
+            'data-active': activeEffort === null ? 'true' : 'false',
+            onClick: () => {
+              if (active === null) return
+              applyModelFromMenu(active.provider, active.model, null)
+            },
+          }, h('span', { className: 'gdt-mp-label' }, t('commit.effortAuto'))),
+          modelMenuEfforts.map((effort) => h('div', {
+            key: `effort-${effort.id}`,
+            className: 'gdt-popup-row',
+            role: 'button',
+            tabIndex: 0,
+            'data-active': activeEffort === effort.id ? 'true' : 'false',
+            onClick: () => {
+              if (active === null) return
+              applyModelFromMenu(active.provider, active.model, effort.id)
+            },
+          }, h('span', { className: 'gdt-mp-label' }, effort.name))),
+          h('div', { className: 'gdt-popup-sep' }),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: closeModelMenu }, t('panel.cancel'))))
+      })()
 
       const menuPopup = repoMenu === null ? null : h('div', {
         ref: popupRef,
@@ -5565,6 +5258,7 @@ window.__ModuleLoader__.load({
         syncDetails,
         banners,
         menuPopup,
+        modelMenuPopup,
         scope === 'history'
           ? historyPane
           : h('div', { className: 'gdt-split' }, statusNodes, fileList, diffPane))
@@ -5621,7 +5315,6 @@ window.__ModuleLoader__.load({
     function openDiffPreview(sessionId, scope, base, files, index) {
       closeMergePicker()
       closeBasePicker()
-      closeModelPicker()
       closePanel(false)
       const list = Array.isArray(files)
         ? files.filter((file) => file !== null && file !== undefined && typeof file.path === 'string' && file.path !== '')
@@ -5831,12 +5524,6 @@ window.__ModuleLoader__.load({
           id: 'git-dock-base',
           order: 102,
         }, BasePicker))
-
-        slots.inject('shell.overlay', () => slots.register({
-          name: 'shell.overlay',
-          id: 'git-dock-model',
-          order: 103,
-        }, ModelPicker))
 
         slots.inject('shell.overlay', () => slots.register({
           name: 'shell.overlay',

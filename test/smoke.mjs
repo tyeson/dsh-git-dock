@@ -429,26 +429,12 @@ const handoff = unwrap(await callApi(handler, 'merge.assist', { sessionId: SESSI
 check('handoff targets only the chosen conflict', handoff.notified === true && handoff.conflicts.length === 1 && handoff.conflicts[0] === 'ai-merge.txt', handoff)
 const handoffPrompt = agentPrompts[agentPrompts.length - 1]
 check('handoff prompt names the chosen file', handoffPrompt !== null && handoffPrompt.content[0].text.includes('ai-merge.txt'), handoffPrompt)
-check('handoff message is an identified user message', handoffPrompt !== null
-  && typeof handoffPrompt.id === 'string' && handoffPrompt.id !== ''
-  && handoffPrompt.role === 'user'
-  && typeof handoffPrompt.source?.kind === 'string', handoffPrompt && { id: handoffPrompt.id, role: handoffPrompt.role, source: handoffPrompt.source })
 const badHandoff = await callApi(handler, 'merge.assist', { sessionId: SESSION, paths: ['not-conflicted.txt'] })
 check('handoff refuses unknown conflict paths', badHandoff.status === 400 && badHandoff.body.error.code === 'not-conflicted', badHandoff.body)
 const aiResolved = unwrap(await callApi(handler, 'merge.resolve', { sessionId: SESSION, path: 'ai-merge.txt' }))
 check('marking the file resolved clears the conflict', aiResolved.conflicts.length === 0, aiResolved.conflicts)
 const aiCompleted = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
 check('handoff-resolved merge can be completed', aiCompleted.repo.operation === 'none', aiCompleted.repo.operation)
-const failureHandoff = unwrap(await callApi(handler, 'merge.assist', {
-  sessionId: SESSION,
-  paths: [],
-  error: { code: 'merge-failed', message: 'Git 合并命令执行失败', details: 'error: Your local changes to the following files would be overwritten by merge' },
-}))
-check('handoff works for a failed merge without conflicts', failureHandoff.notified === true && failureHandoff.conflicts.length === 0 && failureHandoff.failure === true, failureHandoff)
-const failurePrompt = agentPrompts[agentPrompts.length - 1]
-check('failure handoff carries the git error', failurePrompt !== null && failurePrompt.content[0].text.includes('Your local changes'), failurePrompt)
-const noMergeNoError = await callApi(handler, 'merge.assist', { sessionId: SESSION })
-check('handoff still refuses when nothing failed', noMergeNoError.status === 409 && noMergeNoError.body.error.code === 'no-merge', noMergeNoError.body)
 
 console.log('P2 model tool')
 check('git_branch tool registered', tools.length === 1 && tools[0].name === 'git_branch', tools.map((tool) => tool.name))
