@@ -79,7 +79,15 @@ function makeContext(cwd, state) {
     calls: [],
     stream(options) {
       llm.calls.push(options)
-      const text = llm.script.length > 0 ? llm.script.shift() : 'feat(core): 新增测试功能'
+      const prompt = options.messages?.[0]?.content?.[0]?.text ?? ''
+      let text = 'feat(core): 新增测试功能'
+      if (prompt.includes('ai-merge.txt')) {
+        text = JSON.stringify({ 'ai-merge.txt': 'main\nside\n' })
+      } else if (prompt.includes('editor.txt')) {
+        text = JSON.stringify({ 'editor.txt': 'main\nside\n' })
+      } else if (llm.script.length > 0) {
+        text = llm.script.shift()
+      }
       return (async function* chunks() {
         yield { type: 'text-delta', index: 0, text }
         yield { type: 'finish', reason: { kind: 'stop' } }
@@ -402,6 +410,33 @@ const accepted = unwrap(await callApi(handler, 'conflictAccept', { sessionId: SE
 check('accepting incoming clears the conflict', accepted.conflicts.length === 0 && readFileSync(join(repoDir, 'editor.txt'), 'utf8').includes('side'), accepted.conflicts)
 const editorCompleted = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
 check('three-way resolution completes the merge', editorCompleted.repo.operation === 'none', editorCompleted.repo.operation)
+
+console.log('A5 AI-assisted conflict merge')
+writeFileSync(join(repoDir, 'ai-merge.txt'), 'base\n')
+git(repoDir, 'add', 'ai-merge.txt')
+git(repoDir, 'commit', '-qm', 'ai base')
+git(repoDir, 'switch', '-qc', 'ai-side')
+writeFileSync(join(repoDir, 'ai-merge.txt'), 'side\n')
+git(repoDir, 'add', 'ai-merge.txt')
+git(repoDir, 'commit', '-qm', 'ai side')
+git(repoDir, 'switch', '-q', 'main')
+writeFileSync(join(repoDir, 'ai-merge.txt'), 'main\n')
+git(repoDir, 'add', 'ai-merge.txt')
+git(repoDir, 'commit', '-qm', 'ai main')
+const aiPreview = unwrap(await callApi(handler, 'merge.preview', { sessionId: SESSION, source: 'ai-side' }))
+unwrap(await callApi(handler, 'merge.apply', { sessionId: SESSION, confirmToken: aiPreview.confirmToken, confirmed: true }))
+const aiSuggestion = unwrap(await callApi(handler, 'conflictSuggest', { sessionId: SESSION }))
+check('AI suggestion covers the conflicted file', aiSuggestion.files.some((file) => file.path === 'ai-merge.txt' && file.accepted === true), aiSuggestion.files)
+check('suggestion includes a previewable result', typeof aiSuggestion.preview['ai-merge.txt'] === 'string', Object.keys(aiSuggestion.preview))
+const aiApplied = unwrap(await callApi(handler, 'conflictApply', {
+  sessionId: SESSION,
+  results: { 'ai-merge.txt': aiSuggestion.preview['ai-merge.txt'] },
+}))
+check('accepted suggestion replaces the file and clears the conflict', aiApplied.conflicts.length === 0 && readFileSync(join(repoDir, 'ai-merge.txt'), 'utf8').includes('side'), aiApplied.conflicts)
+const badApply = await callApi(handler, 'conflictApply', { sessionId: SESSION, results: {} })
+check('applying nothing is refused', badApply.status === 400 && badApply.body.error.code === 'nothing-selected', badApply.body)
+const aiCompleted = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
+check('AI-resolved merge can be completed', aiCompleted.repo.operation === 'none', aiCompleted.repo.operation)
 
 console.log('P2 model tool')
 check('git_branch tool registered', tools.length === 1 && tools[0].name === 'git_branch', tools.map((tool) => tool.name))

@@ -101,6 +101,14 @@ switching and creating branches.
   Accept incoming (`git checkout --ours|--theirs` + `git add`), and lets the user
   edit the result before saving and marking it resolved. Resolving never commits:
   the merge still completes only on explicit confirmation.
+- **AI-assisted conflict merge (A5)** — beside the copy-conflict-list action, a
+  blue **AI 辅助解决** panel sends the three index stages plus the current result
+  (with marker count) of every conflicted file to the selected model, parses the
+  returned JSON of merged files, and lists them with checkboxes. Each entry can be
+  previewed as the proposed merged content before anything is written; **采用并替换
+  文件** applies only the selected entries to the worktree and stages them, while
+  取消 leaves the working tree untouched. Content that still carries conflict
+  markers is rejected (`conflict-markers`), so a bad suggestion cannot land.
 - **History and advanced Git (A4)** — a fourth tab lists commits (path-filtered
   history supported) with author, date and subject; selecting a commit shows its
   changed files and, per file, the `git show` diff. A compare mode reports

@@ -332,6 +332,18 @@ window.__ModuleLoader__.load({
         'conflict.binary': '二进制文件，无法展示内容',
         'conflict.markers': '仍有 {n} 个冲突标记',
         'conflict.saving': '保存中…',
+        'ai.title': 'AI 辅助解决',
+        'ai.run': '生成合并建议',
+        'ai.running': '生成中…',
+        'ai.cancel': '取消',
+        'ai.confirm': '采用并替换文件',
+        'ai.confirmN': '采用所选 {n} 个文件',
+        'ai.preview': '预览合并结果',
+        'ai.diffPreview': '对比原文件',
+        'ai.mergedFiles': '{ok}/{total} 个文件已生成',
+        'ai.selectAll': '全选',
+        'ai.noneUsable': '没有可用的合并内容，请重试或手动解决',
+        'ai.markersLeft': '仍有冲突标记',
         'history.title': '提交历史',
         'history.empty': '没有可显示的提交',
         'history.pathFilter': '仅显示该文件的提交',
@@ -679,6 +691,18 @@ window.__ModuleLoader__.load({
         'conflict.binary': 'Binary file, content not shown',
         'conflict.markers': '{n} conflict marker(s) remain',
         'conflict.saving': 'Saving…',
+        'ai.title': 'AI-assisted resolution',
+        'ai.run': 'Generate merge suggestion',
+        'ai.running': 'Generating…',
+        'ai.cancel': 'Cancel',
+        'ai.confirm': 'Accept and replace files',
+        'ai.confirmN': 'Accept {n} selected file(s)',
+        'ai.preview': 'Preview merged result',
+        'ai.diffPreview': 'Compare with original',
+        'ai.mergedFiles': '{ok}/{total} file(s) generated',
+        'ai.selectAll': 'Select all',
+        'ai.noneUsable': 'No usable merge content; retry or resolve manually',
+        'ai.markersLeft': 'Conflict markers remain',
         'history.title': 'Commit history',
         'history.empty': 'No commits to show',
         'history.pathFilter': 'Only this file',
@@ -1786,6 +1810,11 @@ window.__ModuleLoader__.load({
         '.gdt-history-detail{flex:1;min-width:0;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}',
         '.gdt-history-commit{display:flex;flex-direction:column;gap:4px;min-width:0}',
         '.gdt-history-files{display:flex;flex-direction:column;gap:2px}',
+        '.gdt-ai-btn{background:var(--dsw-alias-link);color:#fff;border-color:transparent}',
+        '.gdt-ai-btn:hover{background:var(--dsw-alias-link);filter:brightness(1.08)}',
+        '.gdt-ai-btn:disabled{opacity:.55;cursor:not-allowed}',
+        '.gct-ai{display:flex;flex-direction:column;gap:6px;margin:8px 10px 0;padding:8px;border:1px solid color-mix(in srgb, var(--dsw-alias-link) 35%, transparent);border-radius:var(--dsw-radius-md,8px);background:color-mix(in srgb, var(--dsw-alias-link) 6%, transparent)}',
+        '.gct-ai-preview{max-height:220px;overflow:auto;margin-top:6px}',
         '.gdt-history-diff{border-top:1px solid var(--dsw-alias-border-l1);margin-top:6px;padding-top:6px}',
         '.gdt-mono{font-family:var(--dsw-font-mono,ui-monospace,Consolas,monospace);font-size:12px}',
       ].join('\n')
@@ -3264,6 +3293,81 @@ window.__ModuleLoader__.load({
       const [tagList, setTagList] = React.useState(null)
       const [actionBusy, setActionBusy] = React.useState(null)
       const [historyFileDiff, setHistoryFileDiff] = React.useState(null)
+      // ── A5: AI-assisted conflict resolution ────────────────────────────────
+      const [aiOpen, setAiOpen] = React.useState(false)
+      const [aiConflictBusy, setAiConflictBusy] = React.useState(false)
+      const [aiError, setAiError] = React.useState(null)
+      const [aiProposal, setAiProposal] = React.useState(null)
+      const [aiSelected, setAiSelected] = React.useState({})
+      const [aiPreviewPath, setAiPreviewPath] = React.useState(null)
+      const [aiModelOptions, setAiModelOptions] = React.useState(null)
+
+      React.useEffect(() => {
+        if (sessionId === undefined || !aiOpen) return undefined
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('modelOptions', { sessionId })
+            if (!cancelled) setAiModelOptions(value)
+          } catch {
+            if (!cancelled) setAiModelOptions(null)
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, aiOpen])
+
+      const runConflictSuggestion = async () => {
+        if (aiConflictBusy) return
+        setAiBusy(true)
+        setAiError(null)
+        setAiProposal(null)
+        setAiSelected({})
+        setAiPreviewPath(null)
+        try {
+          const value = await callApi('conflictSuggest', {
+            sessionId,
+            ...(modelChoice === null ? {} : { provider: modelChoice.provider, model: modelChoice.model }),
+          })
+          const selected = {}
+          for (const file of value.files ?? []) {
+            if (file.accepted === true) selected[file.path] = true
+          }
+          setAiProposal(value)
+          setAiSelected(selected)
+          const first = Object.keys(selected)[0]
+          setAiPreviewPath(typeof first === 'string' ? first : null)
+        } catch (thrown) {
+          setAiError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setAiBusy(false)
+        }
+      }
+
+      const acceptConflictProposal = async () => {
+        if (aiConflictBusy || aiProposal === null) return
+        const results = {}
+        for (const file of aiProposal.files ?? []) {
+          if (aiSelected[file.path] === true && file.accepted === true) results[file.path] = file.content
+        }
+        if (Object.keys(results).length === 0) return
+        setAiBusy(true)
+        setAiError(null)
+        try {
+          await callApi('conflictApply', { sessionId, results })
+          setAiProposal(null)
+          setAiSelected({})
+          setAiPreviewPath(null)
+          setAiOpen(false)
+          reload()
+          notifyRepoChanged(sessionId)
+        } catch (thrown) {
+          setAiError({ code: thrown.code, message: thrown.message })
+        } finally {
+          setAiBusy(false)
+        }
+      }
 
       React.useEffect(() => {
         if (sessionId === undefined) return undefined
@@ -3642,10 +3746,77 @@ window.__ModuleLoader__.load({
       // ── A3: three-way conflict editor ────────────────────────────────────
 
       const [conflictInfo, setConflictInfo] = React.useState(null)
-      const [conflictBusy, setConflictBusy] = React.useState(null)
+      const [editorBusy, setEditorBusy] = React.useState(null)
       const [conflictDraft, setConflictDraft] = React.useState(null)
       const [conflictTab, setConflictTab] = React.useState('result')
       const [openConflicts, setOpenConflicts] = React.useState({})
+
+      const aiPanel = !aiOpen ? null : h('div', { className: 'gct-ai' },
+        h('div', { className: 'gct-config-title' }, t('ai.title')),
+        h('div', { className: 'gct-actions' },
+          aiProposal === null
+            ? h('button', {
+              type: 'button',
+              className: 'gdt-btn gdt-ai-btn',
+              disabled: aiConflictBusy || hasConflicts !== true,
+              onClick: () => void runConflictSuggestion(),
+            }, aiConflictBusy ? t('ai.running') : t('ai.run'))
+            : h(React.Fragment, null,
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn gdt-ai-btn',
+                disabled: aiConflictBusy || Object.keys(aiSelected).length === 0,
+                onClick: () => void acceptConflictProposal(),
+              }, t('ai.confirmN', { n: Object.keys(aiSelected).length })),
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn',
+                disabled: aiConflictBusy,
+                onClick: () => setAiProposal(null),
+              }, t('ai.cancel'))),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => { setAiProposal(null); setAiOpen(false) } }, t('panel.cancel'))),
+        aiError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(aiError)),
+        aiProposal === null
+          ? null
+          : h('div', null,
+            h('div', { className: 'gdt-summary' }, t('ai.mergedFiles', { ok: aiProposal.acceptedCount, total: aiProposal.total })),
+            (aiProposal.files ?? []).map((file) => h('div', {
+              key: file.path,
+              className: 'gct-config-row',
+              'data-active': aiSelected[file.path] === true ? 'true' : 'false',
+            },
+            h('input', {
+              type: 'checkbox',
+              className: 'gct-check',
+              checked: aiSelected[file.path] === true,
+              disabled: file.accepted !== true,
+              onChange: () => setAiSelected((previous) => {
+                const next = Object.assign({}, previous)
+                if (next[file.path] === true) delete next[file.path]
+                else next[file.path] = true
+                return next
+              }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'gdt-path gdt-link',
+              title: file.path,
+              onClick: () => {
+                setAiPreviewPath(file.path)
+                openConflictFile(file.path)
+              },
+            }, file.path),
+            h('span', { className: 'gdt-summary' }, conflictTypeLabel(file.type)),
+            file.accepted === true
+              ? h('button', { type: 'button', className: 'gdt-btn', onClick: () => setAiPreviewPath(file.path) }, t('ai.preview'))
+              : h('span', { className: 'gdt-summary', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, t('ai.markersLeft')))),
+            aiPreviewPath === null ? null : (() => {
+              const preview = aiProposal.preview[aiPreviewPath]
+              if (typeof preview !== 'string') {
+                return h('div', { className: 'gdt-note' }, t('conflict.missing'))
+              }
+              return h('pre', { className: 'gct-conflict-pre gct-ai-preview' }, preview)
+            })()))
 
       const conflictRow = (item) => {
         const open = openConflicts[item.path] === true
@@ -3679,10 +3850,10 @@ window.__ModuleLoader__.load({
             onTab: setConflictTab,
             draft: conflictDraft,
             onDraft: setConflictDraft,
-            busy: conflictBusy,
+            busy: editorBusy,
             onAccept: async (side) => {
-              if (conflictBusy !== null) return
-              setConflictBusy(side)
+              if (editorBusy !== null) return
+              setEditorBusy(side)
               setActionError(null)
               try {
                 await callApi('conflictAccept', { sessionId, path: item.path, side })
@@ -3692,12 +3863,12 @@ window.__ModuleLoader__.load({
               } catch (thrown) {
                 setActionError({ code: thrown.code, message: thrown.message })
               } finally {
-                setConflictBusy(null)
+                setEditorBusy(null)
               }
             },
             onSave: async () => {
-              if (conflictBusy !== null || conflictDraft === null) return
-              setConflictBusy('save')
+              if (editorBusy !== null || conflictDraft === null) return
+              setEditorBusy('save')
               setActionError(null)
               try {
                 await callApi('conflictSave', { sessionId, path: item.path, content: conflictDraft })
@@ -3707,7 +3878,7 @@ window.__ModuleLoader__.load({
               } catch (thrown) {
                 setActionError({ code: thrown.code, message: thrown.message })
               } finally {
-                setConflictBusy(null)
+                setEditorBusy(null)
               }
             },
           }) : null)
@@ -3890,7 +4061,7 @@ window.__ModuleLoader__.load({
       }
 
       const draftMessage = async () => {
-        if (aiBusy) return
+        if (aiConflictBusy) return
         const currentFiles = dataRef.current === null ? [] : dataRef.current.files ?? []
         if (currentFiles.length === 0) {
           setNotice(t('commit.nothingToDraft'))
@@ -5026,8 +5197,7 @@ window.__ModuleLoader__.load({
           onClick: () => void toggleSyncLog(),
         }, t('sync.details'))) : null
 
-      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },
-        h('div', { className: 'gct-config-title' }, hasConflicts
+      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
           ? t('merge.openTitle', { n: conflictTypes.length })
           : t('merge.noConflicts')),
         hasConflicts

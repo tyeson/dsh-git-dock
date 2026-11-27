@@ -107,6 +107,9 @@
 |---|---|---|---|
 | `llm-unavailable` | 503 | 没有可用的模型服务/模型 | 配置模型 |
 | `llm-failed` | 502 | 模型请求失败 | 重试或换模型 |
+| `conflict-parse-failed` | 502 | AI 未返回可用的合并 JSON | 重试或手动解决 |
+| `conflict-empty-proposal` | 502 | AI 没有给出任何可用合并内容 | 重试或手动解决 |
+| `conflict-markers` | 409 | 采纳的内容仍含冲突标记 | 重新生成或手动编辑 |
 
 ## 审计日志
 
@@ -116,4 +119,4 @@
 {"at":"2026-11-26T08:00:00.000Z","id":"…","action":"discard","repoRoot":"C:/repo","branch":"main","target":["a.ts"],"result":"stashed"}
 ```
 
-当前覆盖动作：`discard`、`discard.undo`、`commit.amend`、`merge.abort`、`merge.complete`、`push`、`stage.patch`、`unstage.patch`、`conflict.accept`、`conflict.save`。日志不记录文件内容与凭证。
+当前覆盖动作：`discard`、`discard.undo`、`commit.amend`、`merge.abort`、`merge.complete`、`push`、`stage.patch`、`unstage.patch`、`conflict.accept`、`conflict.save`、`conflict.ai.suggest`、`conflict.ai.apply`。日志不记录文件内容与凭证。
