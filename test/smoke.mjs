@@ -411,7 +411,7 @@ check('accepting incoming clears the conflict', accepted.conflicts.length === 0 
 const editorCompleted = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
 check('three-way resolution completes the merge', editorCompleted.repo.operation === 'none', editorCompleted.repo.operation)
 
-console.log('A5 AI-assisted conflict merge')
+console.log('A5 one-click conflict handoff')
 writeFileSync(join(repoDir, 'ai-merge.txt'), 'base\n')
 git(repoDir, 'add', 'ai-merge.txt')
 git(repoDir, 'commit', '-qm', 'ai base')
@@ -425,18 +425,16 @@ git(repoDir, 'add', 'ai-merge.txt')
 git(repoDir, 'commit', '-qm', 'ai main')
 const aiPreview = unwrap(await callApi(handler, 'merge.preview', { sessionId: SESSION, source: 'ai-side' }))
 unwrap(await callApi(handler, 'merge.apply', { sessionId: SESSION, confirmToken: aiPreview.confirmToken, confirmed: true }))
-const aiSuggestion = unwrap(await callApi(handler, 'conflictSuggest', { sessionId: SESSION }))
-check('AI suggestion covers the conflicted file', aiSuggestion.files.some((file) => file.path === 'ai-merge.txt' && file.accepted === true), aiSuggestion.files)
-check('suggestion includes a previewable result', typeof aiSuggestion.preview['ai-merge.txt'] === 'string', Object.keys(aiSuggestion.preview))
-const aiApplied = unwrap(await callApi(handler, 'conflictApply', {
-  sessionId: SESSION,
-  results: { 'ai-merge.txt': aiSuggestion.preview['ai-merge.txt'] },
-}))
-check('accepted suggestion replaces the file and clears the conflict', aiApplied.conflicts.length === 0 && readFileSync(join(repoDir, 'ai-merge.txt'), 'utf8').includes('side'), aiApplied.conflicts)
-const badApply = await callApi(handler, 'conflictApply', { sessionId: SESSION, results: {} })
-check('applying nothing is refused', badApply.status === 400 && badApply.body.error.code === 'nothing-selected', badApply.body)
+const handoff = unwrap(await callApi(handler, 'merge.assist', { sessionId: SESSION, paths: ['ai-merge.txt'] }))
+check('handoff targets only the chosen conflict', handoff.notified === true && handoff.conflicts.length === 1 && handoff.conflicts[0] === 'ai-merge.txt', handoff)
+const handoffPrompt = agentPrompts[agentPrompts.length - 1]
+check('handoff prompt names the chosen file', handoffPrompt !== null && handoffPrompt.content[0].text.includes('ai-merge.txt'), handoffPrompt)
+const badHandoff = await callApi(handler, 'merge.assist', { sessionId: SESSION, paths: ['not-conflicted.txt'] })
+check('handoff refuses unknown conflict paths', badHandoff.status === 400 && badHandoff.body.error.code === 'not-conflicted', badHandoff.body)
+const aiResolved = unwrap(await callApi(handler, 'merge.resolve', { sessionId: SESSION, path: 'ai-merge.txt' }))
+check('marking the file resolved clears the conflict', aiResolved.conflicts.length === 0, aiResolved.conflicts)
 const aiCompleted = unwrap(await callApi(handler, 'merge.complete', { sessionId: SESSION }))
-check('AI-resolved merge can be completed', aiCompleted.repo.operation === 'none', aiCompleted.repo.operation)
+check('handoff-resolved merge can be completed', aiCompleted.repo.operation === 'none', aiCompleted.repo.operation)
 
 console.log('P2 model tool')
 check('git_branch tool registered', tools.length === 1 && tools[0].name === 'git_branch', tools.map((tool) => tool.name))

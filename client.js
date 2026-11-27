@@ -333,6 +333,9 @@ window.__ModuleLoader__.load({
         'conflict.markers': '仍有 {n} 个冲突标记',
         'conflict.saving': '保存中…',
         'ai.title': 'AI 辅助解决',
+        'ai.hint': '把当前选中的冲突文件直接发送到会话，模型会自动开始处理',
+        'ai.sending': '发送中…',
+        'ai.sent': '已发送 {target} 到会话，模型开始处理',
         'ai.run': '生成合并建议',
         'ai.running': '生成中…',
         'ai.cancel': '取消',
@@ -692,6 +695,9 @@ window.__ModuleLoader__.load({
         'conflict.markers': '{n} conflict marker(s) remain',
         'conflict.saving': 'Saving…',
         'ai.title': 'AI-assisted resolution',
+        'ai.hint': 'Send the selected conflict files straight to the conversation; the model starts resolving them',
+        'ai.sending': 'Sending…',
+        'ai.sent': 'Sent {target} to the conversation; the model is resolving it',
         'ai.run': 'Generate merge suggestion',
         'ai.running': 'Generating…',
         'ai.cancel': 'Cancel',
@@ -3291,203 +3297,29 @@ window.__ModuleLoader__.load({
       const [tagList, setTagList] = React.useState(null)
       const [actionBusy, setActionBusy] = React.useState(null)
       const [historyFileDiff, setHistoryFileDiff] = React.useState(null)
-      // ── A5: AI-assisted conflict resolution ────────────────────────────────
-      const [aiOpen, setAiOpen] = React.useState(false)
+      // ── A5: one-click conflict handoff to the conversation ──────────────
       const [aiConflictBusy, setAiConflictBusy] = React.useState(false)
-      const [aiError, setAiError] = React.useState(null)
-      const [aiProposal, setAiProposal] = React.useState(null)
-      const [aiSelected, setAiSelected] = React.useState({})
-      const [aiPreviewPath, setAiPreviewPath] = React.useState(null)
-      const [aiModelOptions, setAiModelOptions] = React.useState(null)
 
-      React.useEffect(() => {
-        if (sessionId === undefined || !aiOpen) return undefined
-        let cancelled = false
-        void (async () => {
-          try {
-            const value = await callApi('modelOptions', { sessionId })
-            if (!cancelled) setAiModelOptions(value)
-          } catch {
-            if (!cancelled) setAiModelOptions(null)
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId, aiOpen])
-
-      const runConflictSuggestion = async () => {
+      /** Send the chosen conflict files to the session agent in one step. */
+      const sendConflictsToAgent = async () => {
         if (aiConflictBusy) return
-        setAiBusy(true)
-        setAiError(null)
-        setAiProposal(null)
-        setAiSelected({})
-        setAiPreviewPath(null)
+        const targets = conflictPaths.includes(selected === null ? "" : selected.path)
+          ? [selected.path]
+          : [...conflictPaths]
+        if (targets.length === 0) return
+        setAiConflictBusy(true)
+        setActionError(null)
         try {
-          const value = await callApi('conflictSuggest', {
-            sessionId,
-            ...(modelChoice === null ? {} : { provider: modelChoice.provider, model: modelChoice.model }),
-          })
-          const selected = {}
-          for (const file of value.files ?? []) {
-            if (file.accepted === true) selected[file.path] = true
-          }
-          setAiProposal(value)
-          setAiSelected(selected)
-          const first = Object.keys(selected)[0]
-          setAiPreviewPath(typeof first === 'string' ? first : null)
-        } catch (thrown) {
-          setAiError({ code: thrown.code, message: thrown.message })
-        } finally {
-          setAiBusy(false)
-        }
-      }
-
-      const acceptConflictProposal = async () => {
-        if (aiConflictBusy || aiProposal === null) return
-        const results = {}
-        for (const file of aiProposal.files ?? []) {
-          if (aiSelected[file.path] === true && file.accepted === true) results[file.path] = file.content
-        }
-        if (Object.keys(results).length === 0) return
-        setAiBusy(true)
-        setAiError(null)
-        try {
-          await callApi('conflictApply', { sessionId, results })
-          setAiProposal(null)
-          setAiSelected({})
-          setAiPreviewPath(null)
-          setAiOpen(false)
-          reload()
+          const value = await callApi('merge.assist', { sessionId, paths: targets })
+          const label = targets.length === 1 ? targets[0] : `${targets.length} 个冲突文件`
+          setNotice(t('ai.sent', { target: label }))
           notifyRepoChanged(sessionId)
         } catch (thrown) {
-          setAiError({ code: thrown.code, message: thrown.message })
+          setActionError({ code: thrown.code, message: thrown.message })
         } finally {
-          setAiBusy(false)
+          setAiConflictBusy(false)
         }
       }
-
-      React.useEffect(() => {
-        if (sessionId === undefined) return undefined
-        let cancelled = false
-        void (async () => {
-          try {
-            const value = await callApi('branches', { sessionId })
-            if (!cancelled) {
-              setBranchNames([...(value.local ?? []), ...(value.remote ?? [])].map((branch) => branch.name))
-            }
-          } catch {
-            if (!cancelled) setBranchNames([])
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId])
-
-      const loadHistory = React.useCallback(async (path) => {
-        if (sessionId === undefined) return
-        try {
-          const value = await callApi('history', { sessionId, limit: 80, path: path ?? undefined })
-          setHistoryRows(value.commits ?? [])
-          setHistoryTotal(Number(value.total) || 0)
-        } catch (thrown) {
-          setHistoryRows([])
-          setActionError({ code: thrown.code, message: thrown.message })
-        }
-      }, [sessionId])
-
-      React.useEffect(() => {
-        if (sessionId === undefined || scope !== 'history') return undefined
-        void loadHistory(historyPath)
-        setDetailCommit(null)
-        setDetailValue(null)
-        setCompareMode(false)
-        setCompareValue(null)
-      }, [sessionId, scope, historyPath, reloadTick])
-
-      React.useEffect(() => {
-        if (sessionId === undefined || detailCommit === null) {
-          setDetailValue(null)
-          return undefined
-        }
-        let cancelled = false
-        void (async () => {
-          try {
-            const value = await callApi('commitDetail', { sessionId, commit: detailCommit })
-            if (!cancelled) setDetailValue(value)
-          } catch (thrown) {
-            if (!cancelled) setDetailValue(null)
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId, detailCommit])
-
-      React.useEffect(() => {
-        const node = rootRef.current
-        if (typeof ResizeObserver === 'undefined' || node === null) return undefined
-        const observer = new ResizeObserver((entries) => {
-          const width = entries.length > 0 ? entries[0].contentRect.width : node.clientWidth
-          setNarrow(width < 520)
-        })
-        observer.observe(node)
-        return () => observer.disconnect()
-      }, [])
-      React.useEffect(() => {
-        if (sessionId === undefined) return undefined
-        let cancelled = false
-        void (async () => {
-          try {
-            const value = await callApi('modelOptions', { sessionId })
-            if (!cancelled) {
-              setModelOptions(value)
-              // A remembered route that no longer exists falls back to the conversation.
-              setModelChoice((previous) => {
-                if (previous === null) return previous
-                const exists = (value.providers ?? []).some((provider) => provider.provider === previous.provider
-                  && (provider.models ?? []).some((model) => model.model === previous.model))
-                if (exists) return previous
-                writeStoredModelChoice(null)
-                return null
-              })
-            }
-          } catch (thrown) {
-            if (!cancelled) {
-              setModelOptions({ providers: [], current: null, lastError: { code: thrown.code, message: thrown.message } })
-            }
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId])
-      const labelRouteKey = modelChoice !== null
-        ? `${modelChoice.provider}/${modelChoice.model}`
-        : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
-          ? `${modelOptions.current.provider}/${modelOptions.current.model}`
-          : null
-      React.useEffect(() => {
-        if (sessionId === undefined || labelRouteKey === null) return undefined
-        const split = labelRouteKey.indexOf('/')
-        const provider = labelRouteKey.slice(0, split)
-        const model = labelRouteKey.slice(split + 1)
-        let cancelled = false
-        void (async () => {
-          try {
-            const value = await callApi('modelInfo', { sessionId, provider, model })
-            if (!cancelled) {
-              setActiveModelEfforts({ key: labelRouteKey, efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
-            }
-          } catch {
-            if (!cancelled) setActiveModelEfforts(null)
-          }
-        })()
-        return () => {
-          cancelled = true
-        }
-      }, [sessionId, labelRouteKey])
       const requestRef = React.useRef(0)
       const dataRef = React.useRef(null)
 
@@ -3992,7 +3824,7 @@ window.__ModuleLoader__.load({
       }
 
       const draftMessage = async () => {
-        if (aiConflictBusy) return
+        if (aiBusy) return
         const currentFiles = dataRef.current === null ? [] : dataRef.current.files ?? []
         if (currentFiles.length === 0) {
           setNotice(t('commit.nothingToDraft'))
@@ -5125,73 +4957,6 @@ window.__ModuleLoader__.load({
           onClick: () => void toggleSyncLog(),
         }, t('sync.details'))) : null
 
-      const aiPanel = !aiOpen ? null : h('div', { className: 'gct-ai' },
-        h('div', { className: 'gct-config-title' }, t('ai.title')),
-        h('div', { className: 'gct-actions' },
-          aiProposal === null
-            ? h('button', {
-              type: 'button',
-              className: 'gdt-btn gdt-ai-btn',
-              disabled: aiConflictBusy || hasConflicts !== true,
-              onClick: () => void runConflictSuggestion(),
-            }, aiConflictBusy ? t('ai.running') : t('ai.run'))
-            : h(React.Fragment, null,
-              h('button', {
-                type: 'button',
-                className: 'gdt-btn gdt-ai-btn',
-                disabled: aiConflictBusy || Object.keys(aiSelected).length === 0,
-                onClick: () => void acceptConflictProposal(),
-              }, t('ai.confirmN', { n: Object.keys(aiSelected).length })),
-              h('button', {
-                type: 'button',
-                className: 'gdt-btn',
-                disabled: aiConflictBusy,
-                onClick: () => setAiProposal(null),
-              }, t('ai.cancel'))),
-          h('button', { type: 'button', className: 'gdt-btn', onClick: () => { setAiProposal(null); setAiOpen(false) } }, t('panel.cancel'))),
-        aiError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(aiError)),
-        aiProposal === null
-          ? null
-          : h('div', null,
-            h('div', { className: 'gdt-summary' }, t('ai.mergedFiles', { ok: aiProposal.acceptedCount, total: aiProposal.total })),
-            (aiProposal.files ?? []).map((file) => h('div', {
-              key: file.path,
-              className: 'gct-config-row',
-              'data-active': aiSelected[file.path] === true ? 'true' : 'false',
-            },
-            h('input', {
-              type: 'checkbox',
-              className: 'gct-check',
-              checked: aiSelected[file.path] === true,
-              disabled: file.accepted !== true,
-              onChange: () => setAiSelected((previous) => {
-                const next = Object.assign({}, previous)
-                if (next[file.path] === true) delete next[file.path]
-                else next[file.path] = true
-                return next
-              }),
-            }),
-            h('button', {
-              type: 'button',
-              className: 'gdt-path gdt-link',
-              title: file.path,
-              onClick: () => {
-                setAiPreviewPath(file.path)
-                openConflictFile(file.path)
-              },
-            }, file.path),
-            h('span', { className: 'gdt-summary' }, conflictTypeLabel(file.type)),
-            file.accepted === true
-              ? h('button', { type: 'button', className: 'gdt-btn', onClick: () => setAiPreviewPath(file.path) }, t('ai.preview'))
-              : h('span', { className: 'gdt-summary', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, t('ai.markersLeft')))),
-            aiPreviewPath === null ? null : (() => {
-              const preview = aiProposal.preview[aiPreviewPath]
-              if (typeof preview !== 'string') {
-                return h('div', { className: 'gdt-note' }, t('conflict.missing'))
-              }
-              return h('pre', { className: 'gct-conflict-pre gct-ai-preview' }, preview)
-            })()))
-
       const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
           ? t('merge.openTitle', { n: conflictTypes.length })
           : t('merge.noConflicts')),
@@ -5216,19 +4981,14 @@ window.__ModuleLoader__.load({
             }, t('merge.abortYes')))
           : null,
         mergeError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(mergeError)),
-        aiPanel,
         h('div', { className: 'gct-actions' },
           h('button', {
             type: 'button',
             className: 'gdt-btn gdt-ai-btn',
-            title: t('ai.title'),
-            disabled: conflictPaths.length === 0,
-            onClick: () => {
-              setAiProposal(null)
-              setAiError(null)
-              setAiOpen((open) => open !== true)
-            },
-          }, aiOpen ? t('panel.cancel') : t('ai.title')),
+            title: t('ai.hint'),
+            disabled: aiConflictBusy || conflictPaths.length === 0,
+            onClick: () => void sendConflictsToAgent(),
+          }, aiConflictBusy ? t('ai.sending') : t('ai.title')),
           h('button', {
             type: 'button',
             className: 'gdt-btn',

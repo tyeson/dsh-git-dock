@@ -1897,10 +1897,20 @@ async function notifyAgentResolveConflicts(ctx, body, signal) {
   if (state.operation !== 'merge') {
     throw new ApiError('no-merge', 'no merge is in progress', 409, { state })
   }
-  const conflicts = state.conflictPaths
-  if (conflicts.length === 0) {
+  const allConflicts = state.conflictPaths
+  if (allConflicts.length === 0) {
     throw new ApiError('no-conflicts', 'no conflicted files remain; complete the merge instead', 409, { state })
   }
+  // An explicit path list narrows the request to the file the user picked; an
+  // unknown path is refused so the model is never asked to invent one.
+  const requested = Array.isArray(body.paths)
+    ? [...new Set(body.paths.filter((path) => typeof path === 'string' && path !== ''))]
+    : []
+  const unknown = requested.filter((path) => !allConflicts.includes(path))
+  if (unknown.length > 0) {
+    throw new ApiError('not-conflicted', `not a conflicted path: ${unknown.join(', ')}`, 400, { conflicts: allConflicts })
+  }
+  const conflicts = requested.length > 0 ? requested : allConflicts
   const agents = ctx.get('agents')
   const agent = agents === undefined || agents === null || typeof agents.get !== 'function'
     ? undefined
@@ -1911,12 +1921,16 @@ async function notifyAgentResolveConflicts(ctx, body, signal) {
   if (typeof agent.followup !== 'function') {
     throw new ApiError('agent-unavailable', 'this session cannot accept a prompt right now', 503)
   }
+  const remaining = allConflicts.filter((path) => !conflicts.includes(path))
   const prompt = [
-    '当前会话的工作区处于 Git 合并冲突状态，请立即处理这些冲突。',
+    '当前会话的工作区处于 Git 合并冲突状态，请立即处理以下冲突文件。',
     `仓库：${state.repoRoot}`,
     `当前分支：${state.branch ?? 'detached HEAD'}`,
-    `冲突文件（${conflicts.length} 个）：`,
+    `本次需要处理的冲突文件（${conflicts.length} 个）：`,
     ...conflicts.map((path) => `- ${path}`),
+    ...(remaining.length === 0
+      ? []
+      : ['', `其余仍未解决的冲突（本次不处理）：`, ...remaining.map((path) => `- ${path}`)]),
     '',
     '要求：',
     '1. 逐个读取冲突文件，理解双方意图，合并两边改动，保留全部有效逻辑；',
@@ -1925,210 +1939,7 @@ async function notifyAgentResolveConflicts(ctx, body, signal) {
     '4. 全部标记完成后，简短汇报每个文件是如何处理的。',
   ].join('\n')
   await agent.followup({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })
-  return { notified: true, conflicts, branch: state.branch ?? null }
-}
-
-/** Largest text body one conflict side may contribute to the AI request. */
-const CONFLICT_AI_LIMIT = 8_000
-
-/**
- * Build one file's merge guidance from the three index stages and the worktree.
- *
- * @param {string} repoRoot - repository root.
- * @param {{ path: string, type: string }} item - conflicted row.
- * @param {AbortSignal} [signal] - cancellation.
- * @returns {Promise<{ path: string, type: string, sections: object[], preview: string|null, markers: number }>}
- *   suggested sections plus a plain-text preview of the current result file.
- */
-async function buildConflictGuidance(repoRoot, item, signal) {
-  const sides = [
-    { key: 'base', label: 'Base', args: ['show', `:${1}:${item.path}`] },
-    { key: 'ours', label: 'Current', args: ['show', `:${2}:${item.path}`] },
-    { key: 'theirs', label: 'Incoming', args: ['show', `:${3}:${item.path}`] },
-  ]
-  const sections = []
-  for (const side of sides) {
-    try {
-      const raw = await runGit(repoRoot, side.args, { signal, maxBytes: CONFLICT_AI_LIMIT, exitCodes: [0, 1] })
-      if (/^fatal:/m.test(raw)) continue
-      sections.push({ side: side.key, label: side.label, content: raw.slice(0, CONFLICT_AI_LIMIT), truncated: raw.length > CONFLICT_AI_LIMIT })
-    } catch {
-      sections.push({ side: side.key, label: side.label, content: '', truncated: false })
-    }
-  }
-  let preview = null
-  let markers = 0
-  try {
-    const bytes = await readFile(join(repoRoot, item.path))
-    if (!bytes.includes(0)) {
-      preview = bytes.toString('utf8').slice(0, 6_000)
-      markers = (preview.match(/^<{7}|^={7}|^>{7}/gm) ?? []).length
-    }
-  } catch {
-    preview = null
-  }
-  return { path: item.path, type: item.type, sections, preview, markers }
-}
-
-/**
- * Ask the live model for a merge suggestion and keep the current state as a
- * preview that the user can accept or discard.
- *
- * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
- * @param {object} body - `{ sessionId, provider?, model?, reasoningEffort? }`.
- * @param {AbortSignal} [signal] - cancellation.
- * @returns {Promise<object>} the stored proposal with a previewable result.
- */
-async function suggestConflictMerge(ctx, body, signal) {
-  const llm = ctx.get('llm')
-  if (llm === undefined || llm === null || typeof llm.stream !== 'function') {
-    throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
-  }
-  const { session } = resolveSessionCwd(ctx, body.sessionId)
-  const state = await readRepoState(ctx, body.sessionId, signal)
-  if (state.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409, { state })
-  if (state.conflictPaths.length === 0) throw new ApiError('no-conflicts', 'no conflicted files remain', 409, { state })
-
-  const files = []
-  for (const item of state.conflictTypes) {
-    files.push(await buildConflictGuidance(state.repoRoot, item, signal))
-  }
-
-  const explicitRoute = typeof body.provider === 'string' && body.provider !== '' && typeof body.model === 'string' && body.model !== ''
-    ? { provider: body.provider, model: body.model }
-    : commitModelRoute(ctx, session)
-  if (explicitRoute === null) throw new ApiError('llm-unavailable', 'no model is selected for this session', 503)
-  const reasoningEffort = typeof body.reasoningEffort === 'string' && body.reasoningEffort !== ''
-    ? body.reasoningEffort
-    : null
-
-  const system = '你是合并冲突解决助手。为每个冲突文件给出可直接落地的合并结果：只输出一个 JSON 对象，'
-    + '键为文件路径，值为该文件解决后的完整内容（字符串）。不要解释，不要代码围栏，不要提交或执行 git 命令。'
-    + '冲突标记必须全部消除。'
-  const payload = files.map((file) => ({
-    path: file.path,
-    type: file.type,
-    sections: file.sections.map((section) => ({ side: section.side, content: section.content })),
-    currentResultMarkers: file.markers,
-  }))
-  const prompt = `仓库：${state.repoRoot}\n分支：${state.branch ?? 'detached HEAD'}\n\n冲突文件与三个版本：\n${JSON.stringify(payload)}\n`
-
-  let output = ''
-  const stream = llm.stream({
-    provider: explicitRoute.provider,
-    model: explicitRoute.model,
-    ...(reasoningEffort === null ? {} : { reasoningEffort }),
-    system,
-    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-    maxTokens: 20_000,
-    temperature: 0.2,
-    signal,
-    sessionId: body.sessionId,
-  })
-  for await (const chunk of stream) {
-    if (chunk.type === 'text-delta') output += chunk.text
-    else if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
-      throw new ApiError('llm-failed', chunk.reason.failure?.message ?? 'model request failed', 502)
-    }
-  }
-
-  /** Extract the first JSON object from a fenced or noisy reply. */
-  function extractObject(text) {
-    const candidates = [text]
-    const fenced = /```(?:json)?\s*([\s\S]*?)```/gi.exec(text)
-    if (fenced !== null) candidates.unshift(fenced[1])
-    const braced = /\{[\s\S]*\}/g.exec(text)
-    if (braced !== null) candidates.unshift(braced[0])
-    for (const candidate of candidates) {
-      try {
-        const parsed = JSON.parse(candidate.trim())
-        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
-      } catch {
-        // Try the next candidate.
-      }
-    }
-    return null
-  }
-
-  const parsed = extractObject(output)
-  if (parsed === null) throw new ApiError('conflict-parse-failed', 'the model did not return a JSON object of merged files', 502, { raw: output.slice(0, 1_000) })
-
-  const proposals = []
-  let acceptedCount = 0
-  for (const item of state.conflictTypes) {
-    const value = Object.hasOwn(parsed, item.path) ? parsed[item.path] : undefined
-    const content = typeof value === 'string' ? value : null
-    const accepted = content !== null && !/^(<{7}|={7}|>{7})/m.test(content)
-    if (accepted) acceptedCount += 1
-    proposals.push({ path: item.path, type: item.type, content, accepted, markers: accepted ? (content.match(/^<{7}|^={7}|^>{7}/gm) ?? []).length : null })
-  }
-  if (proposals.every((proposal) => proposal.accepted !== true)) {
-    throw new ApiError('conflict-empty-proposal', 'the model returned no usable merged file', 502, { raw: output.slice(0, 1_000) })
-  }
-
-  const preview = {}
-  for (const proposal of proposals) {
-    if (proposal.accepted !== true) continue
-    const target = join(state.repoRoot, proposal.path)
-    let before = ''
-    try {
-      const bytes = await readFile(target)
-      if (!bytes.includes(0)) before = bytes.toString('utf8')
-    } catch {
-      before = ''
-    }
-    preview[proposal.path] = proposal.content
-  }
-  await appendAudit({ action: 'conflict.ai.suggest', repoRoot: state.repoRoot, branch: state.branch, target: Object.keys(preview), result: `${acceptedCount}/${proposals.length}` })
-  return {
-    provider: explicitRoute.provider,
-    model: explicitRoute.model,
-    acceptedCount,
-    total: proposals.length,
-    files: proposals,
-    preview,
-  }
-}
-
-/**
- * Apply an accepted AI merge suggestion to the worktree and stage it.
- *
- * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
- * @param {object} body - `{ sessionId, results: { path: content }, confirmToken? }`.
- * @param {AbortSignal} [signal] - cancellation.
- * @returns {Promise<object>} the refreshed repository state.
- */
-async function applyConflictMerge(ctx, body, signal) {
-  const results = body.results
-  if (results === null || typeof results !== 'object' || Array.isArray(results)) {
-    throw new ApiError('bad-request', 'results must be an object of file paths to merged content', 400)
-  }
-  const entries = Object.entries(results).filter(([path, content]) => typeof path === 'string' && path !== '' && typeof content === 'string')
-  if (entries.length === 0) throw new ApiError('nothing-selected', 'select at least one merged file', 400)
-  const repoRoot = await resolveRepoRoot(ctx, body.sessionId, signal)
-  return withRepoLock(repoRoot, async () => {
-    const before = await readRepoState(ctx, body.sessionId, signal)
-    if (before.operation !== 'merge') throw new ApiError('no-merge', 'no merge is in progress', 409, { state: before })
-    const remaining = new Set(before.conflictPaths)
-    for (const [rawPath, content] of entries) {
-      const path = assertRepoPath(rawPath)
-      if (!remaining.has(path)) throw new ApiError('not-conflicted', `not a conflicted path: ${path}`, 400, { conflicts: [...remaining] })
-      if (/^(<{7}|={7}|>{7})/m.test(content)) {
-        throw new ApiError('conflict-markers', `the merged content still contains conflict markers: ${path}`, 409, { path })
-      }
-      const target = join(before.repoRoot, path)
-      try {
-        await mkdir(dirname(target), { recursive: true })
-        await writeFile(target, content, 'utf8')
-      } catch {
-        throw new ApiError('conflict-save-failed', 'could not write the merged file', 409, { path })
-      }
-      await runGit(before.repoRoot, ['add', '--', path], { signal, timeoutMs: WRITE_TIMEOUT_MS })
-    }
-    await appendAudit({ action: 'conflict.ai.apply', repoRoot: before.repoRoot, branch: before.branch, target: entries.map(([path]) => path), result: 'ok' })
-    const after = await readRepoState(ctx, body.sessionId, signal)
-    return { repo: after, conflicts: after.conflictTypes, applied: entries.length }
-  })
+  return { notified: true, conflicts, remaining, branch: state.branch ?? null }
 }
 
 // ── P3: refs, checkout, staging, commit, remote ───────────────────────────
@@ -3863,16 +3674,6 @@ const API = {
   /** Commit an in-progress merge whose conflicts are all resolved. */
   async 'merge.complete'(ctx, body, signal) {
     return completeMerge(ctx, body, signal)
-  },
-
-  /** Ask the model for a merge suggestion with a previewable result. */
-  async conflictSuggest(ctx, body, signal) {
-    return suggestConflictMerge(ctx, body, signal)
-  },
-
-  /** Apply an accepted AI merge suggestion to the worktree. */
-  async conflictApply(ctx, body, signal) {
-    return applyConflictMerge(ctx, body, signal)
   },
 
   /** Mark one conflicted path resolved. */
