@@ -2271,7 +2271,12 @@ async function listModelOptions(ctx, body) {
   if (llm === undefined || llm === null || typeof llm.listProviders !== 'function') {
     throw new ApiError('llm-unavailable', 'no LLM service is mounted', 503)
   }
-  const providers = await Promise.resolve(llm.listProviders())
+  // A slow or unreachable provider must not block the whole catalogue.
+  const withTimeout = (promise, ms) => Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => { setTimeout(() => resolve([]), ms) }),
+  ])
+  const providers = await withTimeout(llm.listProviders(), 4_000)
   const entries = []
   for (const providerInfo of Array.isArray(providers) ? providers : []) {
     const providerCandidates = providerInfo !== null && typeof providerInfo === 'object'
@@ -2284,7 +2289,7 @@ async function listModelOptions(ctx, body) {
       : provider
     let models = []
     try {
-      models = await Promise.resolve(llm.listModels(provider))
+      models = await withTimeout(llm.listModels(provider), 4_000)
     } catch {
       models = []
     }

@@ -2890,6 +2890,72 @@ window.__ModuleLoader__.load({
       const [modelOptions, setModelOptions] = React.useState(null)
       const [modelChoice, setModelChoice] = React.useState(readStoredModelChoice)
       const [activeModelEfforts, setActiveModelEfforts] = React.useState(null)
+
+      // Load the provider/model catalogue once per session, then keep the
+      // remembered route in sync with what the session actually advertises.
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('modelOptions', { sessionId })
+            if (cancelled) return
+            setModelOptions(value)
+            setModelChoice((previous) => {
+              if (previous === null) return previous
+              const exists = (value.providers ?? []).some((provider) => provider.provider === previous.provider
+                && (provider.models ?? []).some((model) => model.model === previous.model))
+              if (exists) return previous
+              writeStoredModelChoice(null)
+              return null
+            })
+          } catch (thrown) {
+            if (!cancelled) {
+              setModelOptions({ providers: [], current: null, lastError: { code: thrown.code, message: thrown.message } })
+            }
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId])
+
+      // Resolve the reasoning efforts of the route the commit bar displays.
+      const labelRouteKey = modelChoice !== null
+        ? `${modelChoice.provider}/${modelChoice.model}`
+        : modelOptions !== null && modelOptions.current !== null && modelOptions.current !== undefined
+          ? `${modelOptions.current.provider}/${modelOptions.current.model}`
+          : null
+      React.useEffect(() => {
+        if (sessionId === undefined || labelRouteKey === null) return undefined
+        const split = labelRouteKey.indexOf('/')
+        const provider = labelRouteKey.slice(0, split)
+        const model = labelRouteKey.slice(split + 1)
+        let cancelled = false
+        void (async () => {
+          try {
+            const value = await callApi('modelInfo', { sessionId, provider, model })
+            if (!cancelled) {
+              setActiveModelEfforts({ key: labelRouteKey, efforts: value.efforts ?? [], defaultEffort: value.defaultEffort ?? null })
+            }
+          } catch {
+            if (!cancelled) setActiveModelEfforts(null)
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId, labelRouteKey])
+
+      /** Re-read the model catalogue (used by the menu's retry action). */
+      const reloadModelOptions = async () => {
+        try {
+          const value = await callApi('modelOptions', { sessionId })
+          setModelOptions(value)
+        } catch (thrown) {
+          setModelOptions({ providers: [], current: null, lastError: { code: thrown.code, message: thrown.message } })
+        }
+      }
       const [commitHint, setCommitHint] = React.useState(null)
       const [commitLimit, setCommitLimit] = React.useState(500)
       const [showConfig, setShowConfig] = React.useState(false)
@@ -4888,9 +4954,11 @@ window.__ModuleLoader__.load({
           h('span', { className: 'gdt-mp-label' }, t('commit.modelFollow')),
           h('span', { className: 'gdt-popup-sub' }, modelOptions?.current?.model ?? '')),
           modelOptions === null
-            ? h('div', { className: 'gdt-note' }, t('panel.loading'))
+            ? h('div', { className: 'gdt-note' }, `${t('panel.loading')} `,
+              h('button', { type: 'button', className: 'gdt-btn', onClick: () => void reloadModelOptions() }, t('tab.refresh')))
             : flat.length === 0
-              ? h('div', { className: 'gdt-note' }, t('commit.modelUnavailable'))
+              ? h('div', { className: 'gdt-note' }, `${t('commit.modelUnavailable')} `,
+                h('button', { type: 'button', className: 'gdt-btn', onClick: () => void reloadModelOptions() }, t('tab.refresh')))
               : flat.map((entry) => h('div', {
                 key: `${entry.provider}/${entry.model}`,
                 className: 'gdt-popup-row',
