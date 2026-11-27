@@ -336,6 +336,7 @@ window.__ModuleLoader__.load({
         'ai.hint': '把当前选中的冲突文件直接发送到会话，模型会自动开始处理',
         'ai.sending': '发送中…',
         'ai.sent': '已发送 {target} 到会话，模型开始处理',
+        'ai.sentFailure': '已把 Git 合并失败信息发送到会话，模型开始诊断',
         'ai.run': '生成合并建议',
         'ai.running': '生成中…',
         'ai.cancel': '取消',
@@ -698,6 +699,7 @@ window.__ModuleLoader__.load({
         'ai.hint': 'Send the selected conflict files straight to the conversation; the model starts resolving them',
         'ai.sending': 'Sending…',
         'ai.sent': 'Sent {target} to the conversation; the model is resolving it',
+        'ai.sentFailure': 'Sent the failed merge details to the conversation; the model is diagnosing',
         'ai.run': 'Generate merge suggestion',
         'ai.running': 'Generating…',
         'ai.cancel': 'Cancel',
@@ -1101,16 +1103,44 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* Last failed merge attempt, surfaced to the review tab so the AI handoff can
+     * include the git failure even when no conflict files were produced. */
+    const mergeFailureListeners = new Set()
+    let lastMergeFailure = null
+
+    function notifyMergeFailure(sessionId, failure) {
+      lastMergeFailure = failure === null ? null : { sessionId, failure }
+      for (const listener of mergeFailureListeners) {
+        try {
+          listener(sessionId, failure)
+        } catch {
+          // A broken subscriber must not break the others.
+        }
+      }
+    }
+
+    function onMergeFailure(listener) {
+      mergeFailureListeners.add(listener)
+      return () => mergeFailureListeners.delete(listener)
+    }
+
     async function applyMergeFromPicker() {
       const { sessionId, preview, pending } = mergePicker
       if (sessionId === null || preview === null || pending) return
       setMergeState({ pending: true, actionError: null })
       try {
         await callApi('merge.apply', { sessionId, confirmToken: preview.confirmToken, confirmed: true })
+        notifyMergeFailure(sessionId, null)
         closeMergePicker()
         notifyRepoChanged(sessionId)
       } catch (thrown) {
         setMergeState({ pending: false, actionError: { code: thrown.code, message: thrown.message } })
+        notifyMergeFailure(sessionId, {
+          code: thrown.code,
+          message: thrown.message,
+          details: thrown.details ?? null,
+        })
+        notifyRepoChanged(sessionId)
       }
     }
 
@@ -3299,6 +3329,12 @@ window.__ModuleLoader__.load({
       const [historyFileDiff, setHistoryFileDiff] = React.useState(null)
       // ── A5: one-click conflict handoff to the conversation ──────────────
       const [aiConflictBusy, setAiConflictBusy] = React.useState(false)
+      const [mergeFailure, setMergeFailure] = React.useState(null)
+      React.useEffect(() => {
+        return onMergeFailure((changedSession, failure) => {
+          if (changedSession === sessionId) setMergeFailure(failure)
+        })
+      }, [sessionId])
       const [modelOptionsTick, setModelOptionsTick] = React.useState(0)
 
       React.useEffect(() => {
@@ -3365,17 +3401,27 @@ window.__ModuleLoader__.load({
       /** Send the chosen conflict files to the session agent in one step. */
       const sendConflictsToAgent = async () => {
         if (aiConflictBusy) return
-        const targets = conflictPaths.includes(selected === null ? "" : selected.path)
+        const targets = conflictPaths.includes(selected === null ? '' : selected.path)
           ? [selected.path]
           : [...conflictPaths]
-        if (targets.length === 0) return
+        if (targets.length === 0 && mergeFailure === null) return
         setAiConflictBusy(true)
         setActionError(null)
         try {
-          const value = await callApi('merge.assist', { sessionId, paths: targets })
-          const label = targets.length === 1 ? targets[0] : `${targets.length} 个冲突文件`
+          const value = await callApi('merge.assist', {
+            sessionId,
+            paths: targets,
+            ...(mergeFailure === null
+              ? {}
+              : { error: { code: mergeFailure.code ?? 'merge-failed', message: mergeFailure.message ?? '', details: mergeFailure.details ?? null } }),
+          })
+          const label = targets.length === 0
+            ? t('ai.sentFailure')
+            : targets.length === 1 ? targets[0] : `${targets.length} 个冲突文件`
           setNotice(t('ai.sent', { target: label }))
+          setMergeFailure(null)
           notifyRepoChanged(sessionId)
+          void value
         } catch (thrown) {
           setActionError({ code: thrown.code, message: thrown.message })
         } finally {
@@ -5024,7 +5070,7 @@ window.__ModuleLoader__.load({
           onClick: () => void toggleSyncLog(),
         }, t('sync.details'))) : null
 
-      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
+      const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress && mergeFailure === null) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
           ? t('merge.openTitle', { n: conflictTypes.length })
           : t('merge.noConflicts')),
         hasConflicts
@@ -5047,13 +5093,16 @@ window.__ModuleLoader__.load({
               },
             }, t('merge.abortYes')))
           : null,
+        mergeFailure === null ? null : h('div', { className: 'gdt-error', role: 'alert' },
+          h('div', null, errorText({ code: mergeFailure.code ?? 'merge-failed', message: mergeFailure.message ?? '' })),
+          mergeFailure.message === undefined || mergeFailure.message === '' ? null : h('div', { className: 'gdt-summary', style: { marginTop: '4px' } }, String(mergeFailure.message).slice(0, 400))),
         mergeError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(mergeError)),
         h('div', { className: 'gct-actions' },
           h('button', {
             type: 'button',
             className: 'gdt-btn gdt-ai-btn',
             title: t('ai.hint'),
-            disabled: aiConflictBusy || conflictPaths.length === 0,
+            disabled: aiConflictBusy || (conflictPaths.length === 0 && mergeFailure === null),
             onClick: () => void sendConflictsToAgent(),
           }, aiConflictBusy ? t('ai.sending') : t('ai.title')),
           h('button', {
