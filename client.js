@@ -3751,73 +3751,6 @@ window.__ModuleLoader__.load({
       const [conflictTab, setConflictTab] = React.useState('result')
       const [openConflicts, setOpenConflicts] = React.useState({})
 
-      const aiPanel = !aiOpen ? null : h('div', { className: 'gct-ai' },
-        h('div', { className: 'gct-config-title' }, t('ai.title')),
-        h('div', { className: 'gct-actions' },
-          aiProposal === null
-            ? h('button', {
-              type: 'button',
-              className: 'gdt-btn gdt-ai-btn',
-              disabled: aiConflictBusy || hasConflicts !== true,
-              onClick: () => void runConflictSuggestion(),
-            }, aiConflictBusy ? t('ai.running') : t('ai.run'))
-            : h(React.Fragment, null,
-              h('button', {
-                type: 'button',
-                className: 'gdt-btn gdt-ai-btn',
-                disabled: aiConflictBusy || Object.keys(aiSelected).length === 0,
-                onClick: () => void acceptConflictProposal(),
-              }, t('ai.confirmN', { n: Object.keys(aiSelected).length })),
-              h('button', {
-                type: 'button',
-                className: 'gdt-btn',
-                disabled: aiConflictBusy,
-                onClick: () => setAiProposal(null),
-              }, t('ai.cancel'))),
-          h('button', { type: 'button', className: 'gdt-btn', onClick: () => { setAiProposal(null); setAiOpen(false) } }, t('panel.cancel'))),
-        aiError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(aiError)),
-        aiProposal === null
-          ? null
-          : h('div', null,
-            h('div', { className: 'gdt-summary' }, t('ai.mergedFiles', { ok: aiProposal.acceptedCount, total: aiProposal.total })),
-            (aiProposal.files ?? []).map((file) => h('div', {
-              key: file.path,
-              className: 'gct-config-row',
-              'data-active': aiSelected[file.path] === true ? 'true' : 'false',
-            },
-            h('input', {
-              type: 'checkbox',
-              className: 'gct-check',
-              checked: aiSelected[file.path] === true,
-              disabled: file.accepted !== true,
-              onChange: () => setAiSelected((previous) => {
-                const next = Object.assign({}, previous)
-                if (next[file.path] === true) delete next[file.path]
-                else next[file.path] = true
-                return next
-              }),
-            }),
-            h('button', {
-              type: 'button',
-              className: 'gdt-path gdt-link',
-              title: file.path,
-              onClick: () => {
-                setAiPreviewPath(file.path)
-                openConflictFile(file.path)
-              },
-            }, file.path),
-            h('span', { className: 'gdt-summary' }, conflictTypeLabel(file.type)),
-            file.accepted === true
-              ? h('button', { type: 'button', className: 'gdt-btn', onClick: () => setAiPreviewPath(file.path) }, t('ai.preview'))
-              : h('span', { className: 'gdt-summary', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, t('ai.markersLeft')))),
-            aiPreviewPath === null ? null : (() => {
-              const preview = aiProposal.preview[aiPreviewPath]
-              if (typeof preview !== 'string') {
-                return h('div', { className: 'gdt-note' }, t('conflict.missing'))
-              }
-              return h('pre', { className: 'gct-conflict-pre gct-ai-preview' }, preview)
-            })()))
-
       const conflictRow = (item) => {
         const open = openConflicts[item.path] === true
         const rowMarkerCount = item.markerCount ?? 0
@@ -5197,6 +5130,73 @@ window.__ModuleLoader__.load({
           onClick: () => void toggleSyncLog(),
         }, t('sync.details'))) : null
 
+      const aiPanel = !aiOpen ? null : h('div', { className: 'gct-ai' },
+        h('div', { className: 'gct-config-title' }, t('ai.title')),
+        h('div', { className: 'gct-actions' },
+          aiProposal === null
+            ? h('button', {
+              type: 'button',
+              className: 'gdt-btn gdt-ai-btn',
+              disabled: aiConflictBusy || hasConflicts !== true,
+              onClick: () => void runConflictSuggestion(),
+            }, aiConflictBusy ? t('ai.running') : t('ai.run'))
+            : h(React.Fragment, null,
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn gdt-ai-btn',
+                disabled: aiConflictBusy || Object.keys(aiSelected).length === 0,
+                onClick: () => void acceptConflictProposal(),
+              }, t('ai.confirmN', { n: Object.keys(aiSelected).length })),
+              h('button', {
+                type: 'button',
+                className: 'gdt-btn',
+                disabled: aiConflictBusy,
+                onClick: () => setAiProposal(null),
+              }, t('ai.cancel'))),
+          h('button', { type: 'button', className: 'gdt-btn', onClick: () => { setAiProposal(null); setAiOpen(false) } }, t('panel.cancel'))),
+        aiError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(aiError)),
+        aiProposal === null
+          ? null
+          : h('div', null,
+            h('div', { className: 'gdt-summary' }, t('ai.mergedFiles', { ok: aiProposal.acceptedCount, total: aiProposal.total })),
+            (aiProposal.files ?? []).map((file) => h('div', {
+              key: file.path,
+              className: 'gct-config-row',
+              'data-active': aiSelected[file.path] === true ? 'true' : 'false',
+            },
+            h('input', {
+              type: 'checkbox',
+              className: 'gct-check',
+              checked: aiSelected[file.path] === true,
+              disabled: file.accepted !== true,
+              onChange: () => setAiSelected((previous) => {
+                const next = Object.assign({}, previous)
+                if (next[file.path] === true) delete next[file.path]
+                else next[file.path] = true
+                return next
+              }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'gdt-path gdt-link',
+              title: file.path,
+              onClick: () => {
+                setAiPreviewPath(file.path)
+                openConflictFile(file.path)
+              },
+            }, file.path),
+            h('span', { className: 'gdt-summary' }, conflictTypeLabel(file.type)),
+            file.accepted === true
+              ? h('button', { type: 'button', className: 'gdt-btn', onClick: () => setAiPreviewPath(file.path) }, t('ai.preview'))
+              : h('span', { className: 'gdt-summary', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, t('ai.markersLeft')))),
+            aiPreviewPath === null ? null : (() => {
+              const preview = aiProposal.preview[aiPreviewPath]
+              if (typeof preview !== 'string') {
+                return h('div', { className: 'gdt-note' }, t('conflict.missing'))
+              }
+              return h('pre', { className: 'gct-conflict-pre gct-ai-preview' }, preview)
+            })()))
+
       const conflictSection = repoInfo === null || repoInfo === undefined || (!hasConflicts && !mergeInProgress) ? null : h('div', { className: 'gct-merge' },        h('div', { className: 'gct-config-title' }, hasConflicts
           ? t('merge.openTitle', { n: conflictTypes.length })
           : t('merge.noConflicts')),
@@ -5237,7 +5237,19 @@ window.__ModuleLoader__.load({
             }, t('merge.abortYes')))
           : null,
         mergeError === null ? null : h('div', { className: 'gdt-error', role: 'alert' }, errorText(mergeError)),
+        aiPanel,
         h('div', { className: 'gct-actions' },
+          h('button', {
+            type: 'button',
+            className: 'gdt-btn gdt-ai-btn',
+            title: t('ai.title'),
+            disabled: conflictPaths.length === 0,
+            onClick: () => {
+              setAiProposal(null)
+              setAiError(null)
+              setAiOpen((open) => open !== true)
+            },
+          }, aiOpen ? t('panel.cancel') : t('ai.title')),
           h('button', {
             type: 'button',
             className: 'gdt-btn',
