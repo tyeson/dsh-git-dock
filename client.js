@@ -3221,8 +3221,6 @@ window.__ModuleLoader__.load({
       const [syncPendingPush, setSyncPendingPush] = React.useState(false)
       const [syncLog, setSyncLog] = React.useState(null)
       const [syncLogOpen, setSyncLogOpen] = React.useState(false)
-      const [conflictFilter, setConflictFilter] = React.useState('all')
-      const [conflictSort, setConflictSort] = React.useState('path')
       const autoPushRef = React.useRef(false)
       const rootRef = React.useRef(null)
       const [narrow, setNarrow] = React.useState(false)
@@ -4562,12 +4560,9 @@ window.__ModuleLoader__.load({
         const label = t(key)
         return label === key ? t('sync.other') : label
       }
-      const conflictFilterTypes = ['all', 'content', 'both-added', 'both-deleted', 'added', 'deleted-modified', 'other']
       const visibleConflicts = conflictTypes
-        .filter((item) => conflictFilter === 'all' || item.type === conflictFilter)
-        .sort((left, right) => (conflictSort === 'type'
-          ? left.type.localeCompare(right.type) || left.path.localeCompare(right.path)
-          : left.path.localeCompare(right.path)))
+        .slice()
+        .sort((left, right) => left.path.localeCompare(right.path))
       const mergeInProgress = repoInfo !== null && repoInfo !== undefined && repoInfo.operation === 'merge'
       const hasConflicts = conflictPaths.length > 0
 
@@ -5201,25 +5196,9 @@ window.__ModuleLoader__.load({
           ? t('merge.openTitle', { n: conflictTypes.length })
           : t('merge.noConflicts')),
         hasConflicts
-          ? h('div', null,
-            h('div', { className: 'gct-actions', style: { marginBottom: '6px' } },
-              conflictFilterTypes.map((type) => h('button', {
-                key: type,
-                type: 'button',
-                className: 'gdt-btn',
-                'data-active': conflictFilter === type ? 'true' : 'false',
-                onClick: () => setConflictFilter(type),
-              }, type === 'all' ? t('sync.filterAll') : conflictTypeLabel(type))),
-              h('span', { className: 'gdt-spacer' }),
-              h('button', {
-                type: 'button',
-                className: 'gdt-btn',
-                title: t('sync.typeLabel'),
-                onClick: () => setConflictSort(conflictSort === 'path' ? 'type' : 'path'),
-              }, conflictSort === 'path' ? t('sync.sortPath') : t('sync.sortType'))),
-            visibleConflicts.length === 0
-              ? h('div', { className: 'gdt-note' }, t('panel.empty'))
-              : (conflictInfo ?? visibleConflicts).map((item) => conflictRow(item)))
+          ? ((conflictInfo ?? visibleConflicts).length === 0
+            ? h('div', { className: 'gdt-note' }, t('panel.empty'))
+            : h('div', null, (conflictInfo ?? visibleConflicts).map((item) => conflictRow(item))))
           : null,
         abortConfirm && mergeInProgress
           ? h('div', { className: 'gdt-note' },
