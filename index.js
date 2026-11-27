@@ -1955,7 +1955,15 @@ async function notifyAgentResolveConflicts(ctx, body, signal) {
     '4. 不要执行 git commit、git push，也不要改动无关文件；',
     '5. 处理完成后，简短汇报失败原因与每个文件的处理方式。',
   ].join('\n')
-  await agent.followup({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })
+  // Persisted user messages must be identified: the session store rejects an
+  // event whose message lacks `id` / `role`, which would corrupt the log.
+  const message = {
+    id: randomUUID(),
+    role: 'user',
+    source: { kind: 'user' },
+    content: [{ type: 'text', text: prompt }],
+  }
+  await agent.followup(message)
   return { notified: true, conflicts, remaining, failure: failure !== null, branch: state.branch ?? null }
 }
 

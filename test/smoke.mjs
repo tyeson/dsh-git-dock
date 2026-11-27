@@ -429,6 +429,10 @@ const handoff = unwrap(await callApi(handler, 'merge.assist', { sessionId: SESSI
 check('handoff targets only the chosen conflict', handoff.notified === true && handoff.conflicts.length === 1 && handoff.conflicts[0] === 'ai-merge.txt', handoff)
 const handoffPrompt = agentPrompts[agentPrompts.length - 1]
 check('handoff prompt names the chosen file', handoffPrompt !== null && handoffPrompt.content[0].text.includes('ai-merge.txt'), handoffPrompt)
+check('handoff message is an identified user message', handoffPrompt !== null
+  && typeof handoffPrompt.id === 'string' && handoffPrompt.id !== ''
+  && handoffPrompt.role === 'user'
+  && typeof handoffPrompt.source?.kind === 'string', handoffPrompt && { id: handoffPrompt.id, role: handoffPrompt.role, source: handoffPrompt.source })
 const badHandoff = await callApi(handler, 'merge.assist', { sessionId: SESSION, paths: ['not-conflicted.txt'] })
 check('handoff refuses unknown conflict paths', badHandoff.status === 400 && badHandoff.body.error.code === 'not-conflicted', badHandoff.body)
 const aiResolved = unwrap(await callApi(handler, 'merge.resolve', { sessionId: SESSION, path: 'ai-merge.txt' }))
