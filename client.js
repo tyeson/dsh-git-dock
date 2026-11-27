@@ -5600,7 +5600,7 @@ window.__ModuleLoader__.load({
           }, t('patch.clear')))
 
       const diffPane = h('div', { className: 'gdt-diff' },
-        selected === null ? h('div', { className: 'gdt-empty' }, t('tab.selectFile')) : diffToolbar,
+        selected === null ? null : diffToolbar,
         patchBar,
         diffBody)
 
